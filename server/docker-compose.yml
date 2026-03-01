@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  obsidian-server:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+      - ./app:/app/app
+    environment:
+      - CONFIG_FILE=/data/config.json
+      - API_KEY=default-secret-key
+    restart: unless-stopped

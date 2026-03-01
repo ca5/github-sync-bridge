@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-sync-plugin",
+  "name": "Obsidian 3-Way Sync Settings",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Control your remote sync server settings (like syncing the .obsidian folder).",
+  "author": "Obsidian User",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}
