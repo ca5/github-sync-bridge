@@ -55,19 +55,24 @@ def force_sync(x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
     settings = load_settings()
 
-    # 擬似的な同期実行ロジック
-    # 実際の運用では obsidian-sync コマンドなどを呼び出します
+    # 擬似的な同期実行ロジック (obsidian-headless版)
     # 本番環境で実行する場合は、以下の配列から "echo" を削除してください。
     print(f"Executing force sync... sync_obsidian_config: {settings.sync_obsidian_config}")
 
+    # 1. 構成設定の更新
     if settings.sync_obsidian_config:
-        command = ["echo", "obsidian-sync", "push", "./vault", "--force"]
+        config_command = ["echo", "ob", "sync-config", "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"]
     else:
-        command = ["echo", "obsidian-sync", "push", "./vault", "--ignore", ".obsidian/*", "--force"]
+        config_command = ["echo", "ob", "sync-config", "--configs", ""]
+
+    # 2. 同期の実行
+    sync_command = ["echo", "ob", "sync"]
 
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
-        return {"status": "success", "message": "Force sync triggered successfully.", "output": result.stdout}
+        config_result = subprocess.run(config_command, capture_output=True, text=True, check=True)
+        sync_result = subprocess.run(sync_command, capture_output=True, text=True, check=True)
+        output = config_result.stdout + "\n" + sync_result.stdout
+        return {"status": "success", "message": "Force sync triggered successfully.", "output": output}
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"Sync failed: {e.stderr}")
 

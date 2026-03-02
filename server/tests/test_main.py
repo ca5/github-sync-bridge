@@ -80,8 +80,9 @@ def test_force_sync_execution():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    # デフォルト設定では --ignore ".obsidian/*" が含まれているはず
-    assert "--ignore .obsidian/*" in data["output"]
+    # デフォルト設定(False)では config を空にしているはず
+    assert "ob sync-config --configs \n" in data["output"]
+    assert "ob sync\n" in data["output"]
 
 def test_force_sync_execution_with_obsidian_sync():
     # 設定を変更して .obsidian を同期対象にする
@@ -97,5 +98,6 @@ def test_force_sync_execution_with_obsidian_sync():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    # --ignore ".obsidian/*" が出力に含まれていないことを確認
-    assert "--ignore" not in data["output"]
+    # True の場合は全 config を指定しているはず
+    assert "ob sync-config --configs app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data" in data["output"]
+    assert "ob sync\n" in data["output"]
