@@ -74,17 +74,37 @@ def test_force_sync_without_api_key():
     response = client.post("/api/sync/force")
     assert response.status_code == 401
 
-def test_force_sync_execution():
+from unittest.mock import patch, MagicMock
+
+@patch("subprocess.run")
+def test_force_sync_execution(mock_run):
+    # subprocess.runをモック化
+    mock_result = MagicMock()
+    mock_result.stdout = "Mocked Output"
+    mock_run.return_value = mock_result
+
     # 同期実行のテスト
     response = client.post("/api/sync/force", headers={"X-API-Key": "test-secret-key"})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    # デフォルト設定(False)では config を空にしているはず
-    assert "ob sync-config --configs \n" in data["output"]
-    assert "ob sync\n" in data["output"]
+    # モックの出力が含まれているか
+    assert "Mocked Output" in data["output"]
 
-def test_force_sync_execution_with_obsidian_sync():
+    # コマンドの引数チェック
+    calls = mock_run.call_args_list
+    assert len(calls) == 2
+    # デフォルト設定(False)では config を空にしているはず
+    assert calls[0][0][0] == ["ob", "sync-config", "--configs", ""]
+    assert calls[1][0][0] == ["ob", "sync"]
+
+@patch("subprocess.run")
+def test_force_sync_execution_with_obsidian_sync(mock_run):
+    # subprocess.runをモック化
+    mock_result = MagicMock()
+    mock_result.stdout = "Mocked Output"
+    mock_run.return_value = mock_result
+
     # 設定を変更して .obsidian を同期対象にする
     new_settings = {
         "sync_obsidian_config": True,
@@ -98,6 +118,10 @@ def test_force_sync_execution_with_obsidian_sync():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
+
+    # コマンドの引数チェック
+    calls = mock_run.call_args_list
+    assert len(calls) == 2
     # True の場合は全 config を指定しているはず
-    assert "ob sync-config --configs app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data" in data["output"]
-    assert "ob sync\n" in data["output"]
+    assert calls[0][0][0] == ["ob", "sync-config", "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"]
+    assert calls[1][0][0] == ["ob", "sync"]

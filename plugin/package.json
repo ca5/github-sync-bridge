@@ -1,5 +1,5 @@
 {
-  "name": "obsidian-sync-plugin",
+  "name": "obsidian-sync-bridge",
   "version": "1.0.0",
   "description": "Obsidian plugin to control remote sync server settings",
   "main": "main.js",

@@ -55,18 +55,17 @@ def force_sync(x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
     settings = load_settings()
 
-    # 擬似的な同期実行ロジック (obsidian-headless版)
-    # 本番環境で実行する場合は、以下の配列から "echo" を削除してください。
+    # 同期実行ロジック (obsidian-headless版)
     print(f"Executing force sync... sync_obsidian_config: {settings.sync_obsidian_config}")
 
     # 1. 構成設定の更新
     if settings.sync_obsidian_config:
-        config_command = ["echo", "ob", "sync-config", "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"]
+        config_command = ["ob", "sync-config", "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"]
     else:
-        config_command = ["echo", "ob", "sync-config", "--configs", ""]
+        config_command = ["ob", "sync-config", "--configs", ""]
 
     # 2. 同期の実行
-    sync_command = ["echo", "ob", "sync"]
+    sync_command = ["ob", "sync"]
 
     try:
         config_result = subprocess.run(config_command, capture_output=True, text=True, check=True)
@@ -75,13 +74,38 @@ def force_sync(x_api_key: Optional[str] = Header(None)):
         return {"status": "success", "message": "Force sync triggered successfully.", "output": output}
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"Sync failed: {e.stderr}")
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="obsidian-headless (ob) is not installed or not in PATH.")
 
-# 簡易的な定期実行ワーカー (デモ用)
+# 定期実行ワーカー
 def sync_worker():
     while True:
         settings = load_settings()
-        print(f"Background worker running... Interval: {settings.auto_sync_interval} min")
-        time.sleep(settings.auto_sync_interval * 60)
+        interval = settings.auto_sync_interval
+
+        print(f"Background worker running... Interval: {interval} min, sync_obsidian_config: {settings.sync_obsidian_config}")
+
+        # 1. 構成設定の更新
+        if settings.sync_obsidian_config:
+            config_command = ["ob", "sync-config", "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"]
+        else:
+            config_command = ["ob", "sync-config", "--configs", ""]
+
+        # 2. 同期の実行
+        sync_command = ["ob", "sync"]
+
+        try:
+            # バックグラウンド実行時はエラーを出力して次のループへ
+            subprocess.run(config_command, capture_output=True, text=True, check=True)
+            subprocess.run(sync_command, capture_output=True, text=True, check=True)
+            print("Background sync successful.")
+        except subprocess.CalledProcessError as e:
+            print(f"Background sync failed: {e.stderr}")
+        except FileNotFoundError:
+             print("obsidian-headless (ob) is not installed or not in PATH.")
+
+        # 次のインターバルまで待機
+        time.sleep(interval * 60)
 
 @app.on_event("startup")
 def startup_event():

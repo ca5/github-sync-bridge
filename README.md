@@ -74,7 +74,7 @@ npm run build
 
 ### 2. Obsidianへのインストール
 
-1. `plugin` ディレクトリ内にある以下のファイルを、ObsidianのVault内の `.obsidian/plugins/obsidian-sync-plugin/` ディレクトリにコピーします。
+1. `plugin` ディレクトリ内にある以下のファイルを、ObsidianのVault内の `.obsidian/plugins/obsidian-sync-bridge/` ディレクトリにコピーします。
    * `main.js` (ビルドされたファイル)
    * `manifest.json`
 2. Obsidianの設定 > コミュニティプラグイン から「セーフモード」をオフにし、インストールしたプラグインを有効化します。

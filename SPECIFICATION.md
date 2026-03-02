@@ -54,7 +54,7 @@ ob sync --continuous
 
 ## 3. iPhone/Mac 自作プラグイン：設定画面（Settings Tab）
 
-プラグインの設定画面を「サーバーのダッシュボード」として機能させます。
+プラグイン（**Obsidian Sync Bridge**）の設定画面を「サーバーのダッシュボード」として機能させます。
 
 ### A. 設定項目 UI
 

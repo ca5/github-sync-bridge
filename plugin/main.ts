@@ -10,7 +10,7 @@ const DEFAULT_SETTINGS: SyncPluginSettings = {
     apiKey: 'default-secret-key'
 }
 
-export default class SyncPlugin extends Plugin {
+export default class SyncBridgePlugin extends Plugin {
     settings: SyncPluginSettings;
 
     async onload() {
@@ -34,10 +34,10 @@ export default class SyncPlugin extends Plugin {
 }
 
 class SyncSettingTab extends PluginSettingTab {
-    plugin: SyncPlugin;
+    plugin: SyncBridgePlugin;
     remoteSettings: any;
 
-    constructor(app: App, plugin: SyncPlugin) {
+    constructor(app: App, plugin: SyncBridgePlugin) {
         super(app, plugin);
         this.plugin = plugin;
         this.remoteSettings = null;
