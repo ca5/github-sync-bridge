@@ -4,7 +4,6 @@
   "description": "Obsidian 3-Way Sync System",
   "private": true,
   "scripts": {
-    "postinstall": "pnpm install --filter obsidian-sync-bridge",
     "build:plugin": "pnpm --filter obsidian-sync-bridge build"
   },
   "dependencies": {
