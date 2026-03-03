@@ -2,23 +2,33 @@
 
 ## システム概要
 
-モバイル / デスクトップの Obsidian ↔ **サーバー** ↔ GitHub を繋ぐ 3-Way Sync システム。
+モバイル / デスクトップの Obsidian ↔ **Obsidian Sync クラウド** ↔ **サーバー** ↔ GitHub を繋ぐ 3-Way Sync システム。
 
-```
-[モバイル]                           [デスクトップ]
-  Obsidian アプリ                    Obsidian アプリ / エディタ
-       │                                  │
-       │ Obsidian Sync (自動・双方向)     │ Obsidian Sync (自動・双方向)
-       └──────────────┬───────────────────┘
-                      ▼
-                  [サーバー]
-                   vault/    ←→  ob sync  ←→  Obsidian Sync クラウド
-                   .git/     ←→  git API  ←→  GitHub
-                                    ↑
-                    ┌───────────────┤
-                    │ モバイルから   │ デスクトップから
-                    │ プラグイン経由 │ git コマンド直接 or プラグイン経由
-                    └───────────────┘
+```mermaid
+graph TD
+    Mobile["モバイル
+    (Obsidian アプリ)"]
+    Desktop["デスクトップ
+    (Obsidian アプリ / エディタ)"]
+    Cloud["☁️ Obsidian Sync クラウド"]
+    Server["🖥️ サーバー
+    vault/  ・  .git/"]
+    GitHub["🐙 GitHub
+    リポジトリ"]
+
+    Mobile  <-->|"Obsidian Sync
+    自動・双方向"| Cloud
+    Desktop <-->|"Obsidian Sync
+    自動・双方向"| Cloud
+    Server  <-->|"ob sync
+    自動・定期実行"| Cloud
+
+    Mobile  -->|"プラグイン経由
+    Git API（手動）"| Server
+    Server  <-->|"git push / pull
+    SSH認証（手動）"| GitHub
+    Desktop <-->|"git コマンド直接
+    （手動）"| GitHub
 ```
 
 ### 操作主体とアクセス方法
@@ -26,10 +36,10 @@
 | 操作 | モバイル | デスクトップ |
 |---|---|---|
 | ノートの作成・編集 | Obsidian アプリ | Obsidian アプリ or エディタ |
-| Obsidian Sync | 自動（Obsidian Sync） | 自動（Obsidian Sync） |
-| コミット & Push | **プラグイン → サーバーGit API** | `git` 直接 or サーバーGit API |
-| ブランチ切り替え | **プラグイン → サーバーGit API** | `git checkout` 直接 |
-| Pull | **プラグイン → サーバーGit API** | `git pull` 直接 |
+| Obsidian Sync | 自動（Obsidian Sync クラウド経由） | 自動（Obsidian Sync クラウド経由） |
+| コミット & Push | **プラグイン → サーバー Git API** | `git` コマンド直接 |
+| ブランチ切り替え | **プラグイン → サーバー Git API** | `git checkout` 直接 |
+| Pull | **プラグイン → サーバー Git API** | `git pull` 直接 |
 
 > **サーバーの Git API はモバイルが主な利用者。**
 > デスクトップは git コマンドを直接実行できるため、サーバーを経由する必要はない（するのも可）。
