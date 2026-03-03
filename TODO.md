@@ -19,6 +19,21 @@
 - [ ] `OBSIDIAN_E2E_PASSWORD` 環境変数対応（E2E暗号化Vault対応）
 - [ ] `github_branch_patterns` の実際の利用（フィールド定義はあるが未使用）
 
+---
+
+## ❌ GitHub連携（**3-Way Syncの3本目**）
+
+> vault/ ↔ GitHubリポジトリ の同期。現状は全く未実装。
+
+- [ ] `git pull` / `git push` による vault/ ↔ GitHub の同期
+- [ ] `github_branch_patterns` に基づくブランチのフィルタリング
+- [ ] GitHub Personal Access Token の認証対応（環境変数）
+- [ ] `/api/github/sync` エンドポイント（GitHub向け強制同期）
+- [ ] git同期を含むバックグラウンドワーカーへの組み込み
+- [ ] コンフリクト発生時のフォールバックベバビア
+
+**要確認**: GitHubへの push は自動か / 手動トリガーのみか？
+
 ### 安全対策（仕様外で追加）
 - [x] 空Vaultに対するsyncをブロックする安全チェック
 - [x] sync.lock の自動解放（起動時・各sync前）
@@ -66,8 +81,9 @@
 ## 📋 実装優先順位（提案）
 
 1. ~~**`/api/sync/status` エンドポイント**~~ ✅ 完了
-2. **`OBSIDIAN_AUTH_TOKEN` 対応**（Dockerで動かすのに必須）
-3. **Web管理画面**（仕様 §4）
-4. **プラグインのステータス表示**
-5. **`ob sync --continuous` への移行**
-6. **追加テスト**
+2. **GitHub連携（git pull/push）**（← 3-Way Syncの柱なのに完全未実装）
+3. **`OBSIDIAN_AUTH_TOKEN` 対応**（Dockerで動かすのに必須）
+4. **Web管理画面**（仕様 §4）
+5. **プラグインのステータス表示**
+6. **`ob sync --continuous` への移行**
+7. **追加テスト**

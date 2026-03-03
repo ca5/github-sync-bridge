@@ -1,86 +1,203 @@
-# Obsidian 3-Way Sync システム仕様書 (Settings-Integrated 版)
+# Obsidian 3-Way Sync システム仕様書
 
-## 1. サーバー側：動的設定機能の追加
+## システム概要
 
-サーバー側に設定値を保存する `config.json` を用意し、API経由でプラグインから書き換え可能にします。
+iPhone / デスクトップの Obsidian ↔ **サーバー** ↔ GitHub を繋ぐ 3-Way Sync システム。
 
-### A. 管理する設定項目（例）
+```
+[iPhone]                           [Desktop]
+  Obsidian アプリ                    Obsidian アプリ
+       │                                  │
+       │  Obsidian Sync (自動・双方向)    │  Obsidian Sync (自動・双方向)
+       └──────────────┬───────────────────┘
+                      ▼
+                  [サーバー]
+                   vault/          ← ob sync で Obsidian Sync クラウドと同期
+                   .git/           ← git で GitHub と同期
+                      │
+          ┌───────────┴───────────┐
+          │ モバイルから           │ デスクトップから
+          │ プラグイン/API 経由    │ git コマンドを直接実行
+          ▼                       ▼
+       [GitHub]               [GitHub]
+```
 
-*   `sync_obsidian_config` (boolean): `.obsidian` フォルダを同期対象に含めるかどうか。
-*   `auto_sync_interval` (int): 自動同期のサイクル（分）。
-*   `github_branch_patterns` (array): 同期対象とするブランチのホワイトリストなど。
+### 操作主体とアクセス方法
 
-### B. 設定用 API エンドポイント
+| 操作 | モバイル（iPhone） | デスクトップ |
+|---|---|---|
+| ノートの作成・編集 | Obsidian アプリ | Obsidian アプリ or エディタ |
+| Obsidian Sync | 自動（Obsidian Sync） | 自動（Obsidian Sync） |
+| ブランチ切り替え | **サーバーAPI / プラグイン UI** | `git checkout` を直接実行 |
+| コミット & Push | **サーバーAPI / プラグイン UI** | `git commit && git push` を直接実行 |
+| Pull | **サーバーAPI / プラグイン UI** | `git pull` を直接実行 |
+
+> **設計方針**: サーバーの Git API はモバイルから git 操作を行うための橋渡しが主目的。  
+> デスクトップでは git コマンドを直接使えばよく、サーバーの Git API を使う必要はない。
+
+### 3つのレイヤー
+
+| レイヤー | 役割 | 同期方法 | タイミング |
+|---|---|---|---|
+| Obsidian Sync | iPhone/Desktop ↔ vault/ | `ob sync` | 自動（定期） |
+| Git | vault/ ↔ GitHub | `git commit` / `git push` / `git pull` | **手動トリガー** |
+| ブランチ切り替え | vault/ の内容切り替え | `git checkout` | **手動トリガー** |
+
+---
+
+## ユースケース別フロー
+
+### 1. モバイルで新しいメモを追加した時
+
+```
+iPhone Obsidian → [Obsidian Sync 自動] → vault/ → (必要なら手動) → git commit + push → GitHub
+```
+
+1. iPhone の Obsidian でメモを作成
+2. Obsidian Sync が自動でサーバーの `vault/` に反映（`ob sync` 定期実行）
+3. （任意）プラグインの「Commit & Push」ボタンでメモを GitHub にも保存
+
+---
+
+### 2. 外部ツールで更新したブランチをデスクトップで続ける時
+
+```
+GitHub (外部で更新済み) → [ブランチ切り替え] → vault/ → [Obsidian Sync 自動] → Desktop Obsidian
+```
+
+1. Web管理画面 or プラグインからブランチを選択（`git checkout <branch>`）
+2. `vault/` の内容が切り替わる
+3. Obsidian Sync がサーバーの `vault/` をクラウドへ push
+4. デスクトップ Obsidian が Obsidian Sync からファイルを pull → 作業開始
+
+---
+
+### 3. 外部ツールで更新したブランチをモバイルで続ける時
+
+```
+GitHub (外部で更新済み) → [ブランチ切り替え] → vault/ → [Obsidian Sync 自動] → iPhone Obsidian
+```
+
+フロー は ユースケース2 と同じ。最終的な受け取り先が iPhone になる。
+
+---
+
+### 4. デスクトップで作ったドキュメントをモバイルで修正する時
+
+```
+Desktop Obsidian → [Obsidian Sync 自動] → vault/ → [Obsidian Sync 自動] → iPhone Obsidian
+```
+
+1. デスクトップの Obsidian でドキュメントを作成・編集
+2. Obsidian Sync が自動でサーバーの `vault/` に同期
+3. `ob sync` がクラウドに反映
+4. iPhone の Obsidian が Obsidian Sync からファイルを受け取る → 修正開始
+
+---
+
+### 5. モバイルで作ったメモをデスクトップで修正する時
+
+```
+iPhone Obsidian → [Obsidian Sync 自動] → vault/ → [Obsidian Sync 自動] → Desktop Obsidian
+```
+
+フローは ユースケース4 の逆方向。
+
+---
+
+## API 仕様
+
+### 既存エンドポイント
 
 | エンドポイント | メソッド | 説明 |
 |---|---|---|
-| `/api/settings` | GET | 現在のサーバー設定を取得。 |
-| `/api/settings` | POST | 設定値を更新（`.obsidian` 同期のON/OFFなど）。 |
-| `/api/sync/force` | POST | 強制フル同期を実行。 |
+| `/api/settings` | GET | サーバー設定を取得 |
+| `/api/settings` | POST | サーバー設定を更新 |
+| `/api/sync/force` | POST | Obsidian Sync を強制実行 |
+| `/api/sync/status` | GET | 最終 sync 時刻・結果・Vault 状態 |
 
-## 2. 同期ロジックの動的制御
+### 追加予定：Git 操作エンドポイント
 
-サーバーの同期は、公式のヘッドレスクライアントである `obsidian-headless` (npmパッケージ) を利用します。
-実行時に設定値（`sync_obsidian_config`）をチェックし、`ob sync-config` コマンドを使用して、`.obsidian`（設定）の同期有無を動的に切り替えます。
+| エンドポイント | メソッド | 説明 |
+|---|---|---|
+| `/api/git/status` | GET | 現在のブランチ・変更ファイル一覧 |
+| `/api/git/branches` | GET | ブランチ一覧（local + remote） |
+| `/api/git/checkout` | POST | ブランチの切り替え |
+| `/api/git/commit` | POST | 変更をコミット（コミットメッセージを受け取る） |
+| `/api/git/push` | POST | リモートへ push |
+| `/api/git/pull` | POST | リモートから pull |
 
-### 必要な環境変数・構成
+---
 
-*   `OBSIDIAN_AUTH_TOKEN`: `ob login` の代わりに使用する、非対話環境用の認証トークン。
-*   `OBSIDIAN_VAULT_NAME` (or ID): 同期対象のVault名。
-*   `OBSIDIAN_E2E_PASSWORD` (任意): エンドツーエンド暗号化のパスワード。
+## サーバー設定項目
 
-### 同期コマンドの流れ（擬似ロジック）
+### 既存
 
-```bash
-cd ./vault
+| 項目 | 型 | 説明 |
+|---|---|---|
+| `sync_obsidian_config` | bool | `.obsidian` フォルダを同期対象に含めるか |
+| `auto_sync_interval` | int | Obsidian Sync の自動実行サイクル（分） |
+| `github_branch_patterns` | array | 表示・操作を許可するブランチのパターン |
 
-# 1. プラグインから設定された sync_obsidian_config の値に応じて
-#    ob sync-config コマンドで構成同期の有無を更新する。
-if [ "$SYNC_OBSIDIAN_CONFIG" = "true" ]; then
-  # 設定項目をすべて同期する（app, appearance, core-plugin, community-pluginなど）
-  ob sync-config --configs "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"
-else
-  # 設定項目の同期を無効化する（空文字を渡す）
-  ob sync-config --configs ""
-fi
+### 追加予定（環境変数で設定）
 
-# 2. 同期を実行する
-#    Force Sync (手動) の場合:
-ob sync
+| 環境変数 | 説明 |
+|---|---|
+| `GITHUB_REPO_URL` | SSH形式のリポジトリURL（例: `git@github.com:user/notes.git`） |
+| `GIT_SSH_KEY_PATH` | SSH秘密鍵のパス（デフォルト: `~/.ssh/id_rsa`） |
+| `VAULT_DIR` | vault のローカルパス |
+| `API_KEY` | API認証キー |
+| `OB_CMD` | ob コマンドの絶対パス |
 
-#    Auto Sync Worker (自動) の場合:
-ob sync --continuous
-```
+---
 
-## 3. iPhone/Mac 自作プラグイン：設定画面（Settings Tab）
+## プラグイン（Obsidian Sync Bridge）設定画面
 
-プラグイン（**Obsidian Sync Bridge**）の設定画面を「サーバーのダッシュボード」として機能させます。
+### 既存 UI
 
-### A. 設定項目 UI
+- **Server URL** / **API Key** / **Connect & Load** ボタン
+- **Sync .obsidian folder** トグル
+- **Sync Interval** 数値入力
+- **Force Full Sync** ボタン（Obsidian Sync 向け）
 
-*   **Server URL**: 構築したサーバーのIPアドレスまたはドメイン。
-*   **API Key**: 認証用のトークン。
-*   **Sync Settings**:
-    *   **Sync .obsidian folder**: トグルスイッチ。これを切り替えるとサーバーの API を叩き、サーバー側の挙動が即座に変わります。
-    *   **Sync Interval**: 数値入力。
-*   **Maintenance**:
-    *   **Force Full Sync**: サーバー側で強制的な `push --force` を実行させるボタン。
+### 追加予定 UI
 
-## 4. Web管理画面の役割
+- **Sync Status** セクション：最終 sync 時刻・成功/失敗表示
+- **Git** セクション：
+  - 現在のブランチ表示
+  - ブランチ切り替えドロップダウン（`github_branch_patterns` でフィルタ）
+  - コミットメッセージ入力 + **Commit** ボタン
+  - **Push** ボタン
+  - **Pull** ボタン
 
-Macのブラウザから開くWeb画面も、プラグインの設定画面と同じ API を共有します。
+---
 
-*   **用途**: Obsidianを開いていない状態でも、ブラウザから現在の同期ステータスを確認したり、緊急でブランチを切り替えたりするために利用します。
+## Web 管理画面（ブラウザ向け）
 
-## 5. 修正版：システム全体の連携フロー
+Obsidian を開いていない状態でもブラウザからサーバーを操作できる画面。
+プラグインと同じ API を利用する。
 
-1.  **プラグインで設定変更**:
-    iPhoneのObsidian設定画面で「Sync .obsidian」をONにする。
-2.  **サーバーへ通知**:
-    プラグインが `/api/settings` (POST) を叩き、サーバーの `config.json` が更新される。
-3.  **次回同期からの反映**:
-    サーバーが設定を読み込み、`ob sync-config --configs "..."` コマンドを発行して構成設定の同期状態を更新した上で、`ob sync` による同期を行う。
+- 現在の同期ステータス表示
+- git ステータス表示（現在のブランチ・変更ファイル数）
+- ブランチ切り替え
+- Commit & Push 操作
+- Force Sync（Obsidian Sync 向け）
 
-## 6. 技術的なポイント：設定の永続化
+---
 
-サーバー側は Docker で動かす際、設定ファイルを **Volume マウント** しておくことで、コンテナを再起動してもプラグインから設定した内容（`.obsidian` 同期のON/OFFなど）が消えないようにします。
+## 技術的な注意事項
+
+### GitHub SSH 認証
+
+- SSH 秘密鍵を `GIT_SSH_KEY_PATH` 環境変数で指定
+- `git` コマンド実行時に `GIT_SSH_COMMAND` を設定して使用
+
+### ブランチ切り替え時の注意
+
+- `git checkout` 前に未コミットの変更がある場合はエラーを返す（自動コミットはしない）
+- 切り替え後、Obsidian Sync が次のサイクルで自動的に新しい内容をクラウドに反映する
+
+### git と Obsidian Sync の競合について
+
+- `ob sync` と `git` 操作は同時に実行しない（ロック機構が必要）
+- `git checkout` 中は `ob sync` をスキップする
