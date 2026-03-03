@@ -21,18 +21,30 @@
 
 ---
 
-## ❌ GitHub連携（**3-Way Syncの3本目**）
+## ❌ GitHub連携（**3-Way Syncの3本目**、サーバーGit API）
 
-> vault/ ↔ GitHubリポジトリ の同期。現状は全く未実装。
+> モバイルは git を直接触れないため、サーバーの Git API 経由で操作する。
+> デスクトップは `git` コマンドを直接使うため、サーバーGit APIは不要（任意で使用可）。
+>
+> **確定済み方針:**
+> - コミット・Push は **手動トリガー**（プラグインのボタン）
+> - SSH 鍵認証（`GIT_SSH_KEY_PATH` 環境変数）
+> - リポジトリは `GITHUB_REPO_URL` 環境変数で指定
+> - 未コミット変更がある状態でのブランチ切り替えは **エラーを返す**
 
-- [ ] `git pull` / `git push` による vault/ ↔ GitHub の同期
-- [ ] `github_branch_patterns` に基づくブランチのフィルタリング
-- [ ] GitHub Personal Access Token の認証対応（環境変数）
-- [ ] `/api/github/sync` エンドポイント（GitHub向け強制同期）
-- [ ] git同期を含むバックグラウンドワーカーへの組み込み
-- [ ] コンフリクト発生時のフォールバックベバビア
+### サーバーGit APIエンドポイント
+- [ ] `GET /api/git/status` - 現在のブランチ・変更ファイル一覧
+- [ ] `GET /api/git/branches` - ブランチ一覧（local + remote）
+- [ ] `POST /api/git/checkout` - ブランチ切り替え（未コミット変更があればエラー）
+- [ ] `POST /api/git/commit` - コミット（コミットメッセージを指定）
+- [ ] `POST /api/git/push` - リモートへ push（SSH認証）
+- [ ] `POST /api/git/pull` - リモートから pull
 
-**要確認**: GitHubへの push は自動か / 手動トリガーのみか？
+### プラグイン Git UI（モバイル向け）
+- [ ] 現在のブランチ表示
+- [ ] ブランチ切り替えドロップダウン（`github_branch_patterns` でフィルタ）
+- [ ] コミットメッセージ入力 + **Commit** ボタン
+- [ ] **Push** / **Pull** ボタン
 
 ### 安全対策（仕様外で追加）
 - [x] 空Vaultに対するsyncをブロックする安全チェック
