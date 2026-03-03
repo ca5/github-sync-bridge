@@ -95,8 +95,8 @@ def test_force_sync_execution(mock_run):
     calls = mock_run.call_args_list
     assert len(calls) == 2
     # デフォルト設定(False)では config を空にしているはず
-    assert calls[0][0][0] == ["ob", "sync-config", "--configs", ""]
-    assert calls[1][0][0] == ["ob", "sync"]
+    assert calls[0][0][0][1:] == ["sync-config", "--configs", ""]
+    assert calls[1][0][0][1:] == ["sync"]
 
 @patch("subprocess.run")
 def test_force_sync_execution_with_obsidian_sync(mock_run):
@@ -123,5 +123,5 @@ def test_force_sync_execution_with_obsidian_sync(mock_run):
     calls = mock_run.call_args_list
     assert len(calls) == 2
     # True の場合は全 config を指定しているはず
-    assert calls[0][0][0] == ["ob", "sync-config", "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"]
-    assert calls[1][0][0] == ["ob", "sync"]
+    assert calls[0][0][0][1:] == ["sync-config", "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"]
+    assert calls[1][0][0][1:] == ["sync"]

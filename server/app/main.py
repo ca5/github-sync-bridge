@@ -6,8 +6,17 @@ import os
 import subprocess
 import threading
 import time
+from datetime import datetime, timezone
 
 app = FastAPI(title="Obsidian Sync Server API")
+
+# 同期ステータスをメモリで管理
+_sync_status = {
+    "last_sync_at": None,       # 最終sync実行時刻 (ISO8601)
+    "last_sync_result": None,   # "success" | "failed" | "skipped"
+    "last_sync_message": "",    # エラーメッセージなど
+    "is_vault_ready": False,    # Vaultが同期可能な状態か
+}
 
 CONFIG_FILE = os.getenv("CONFIG_FILE", "./data/config.json")
 API_KEY = os.getenv("API_KEY", "default-secret-key")
@@ -49,6 +58,16 @@ def verify_api_key(api_key: str):
 def get_settings(x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
     return load_settings()
+
+@app.get("/api/sync/status")
+def get_sync_status(x_api_key: Optional[str] = Header(None)):
+    verify_api_key(x_api_key)
+    safe, reason = check_vault_safety()
+    return {
+        **_sync_status,
+        "is_vault_ready": safe,
+        "vault_dir": VAULT_DIR,
+    }
 
 @app.post("/api/settings", response_model=Settings)
 def update_settings(settings: Settings, x_api_key: Optional[str] = Header(None)):
@@ -131,6 +150,11 @@ def sync_worker():
         safe, reason = check_vault_safety()
         if not safe:
             print(f"Background sync skipped: {reason}")
+            _sync_status.update({
+                "last_sync_at": datetime.now(timezone.utc).isoformat(),
+                "last_sync_result": "skipped",
+                "last_sync_message": reason,
+            })
             time.sleep(interval * 60)
             continue
 
@@ -147,14 +171,30 @@ def sync_worker():
         sync_command = [OB_CMD, "sync"]
 
         try:
-            # バックグラウンド実行時はエラーを出力して次のループへ
             subprocess.run(config_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
             subprocess.run(sync_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
             print("Background sync successful.")
+            _sync_status.update({
+                "last_sync_at": datetime.now(timezone.utc).isoformat(),
+                "last_sync_result": "success",
+                "last_sync_message": "",
+            })
         except subprocess.CalledProcessError as e:
-            print(f"Background sync failed: {e.stderr}")
+            msg = e.stderr.strip()
+            print(f"Background sync failed: {msg}")
+            _sync_status.update({
+                "last_sync_at": datetime.now(timezone.utc).isoformat(),
+                "last_sync_result": "failed",
+                "last_sync_message": msg,
+            })
         except FileNotFoundError:
-             print("obsidian-headless (ob) is not installed or not in PATH.")
+            msg = "obsidian-headless (ob) is not installed or not in PATH."
+            print(msg)
+            _sync_status.update({
+                "last_sync_at": datetime.now(timezone.utc).isoformat(),
+                "last_sync_result": "failed",
+                "last_sync_message": msg,
+            })
 
         # 次のインターバルまで待機
         time.sleep(interval * 60)
