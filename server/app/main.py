@@ -138,6 +138,132 @@ def force_sync(x_api_key: Optional[str] = Header(None)):
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="obsidian-headless (ob) is not installed or not in PATH.")
 
+# -------------------------------------------------------------------
+# Git API
+# -------------------------------------------------------------------
+
+# SSH 認証用の環境変数を組み立てる
+_GIT_SSH_KEY = os.getenv("GIT_SSH_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa"))
+
+def _git_env() -> dict:
+    """git コマンド実行時の環境変数（SSH 認証を含む）"""
+    env = os.environ.copy()
+    env["GIT_SSH_COMMAND"] = f"ssh -i {_GIT_SSH_KEY} -o StrictHostKeyChecking=no"
+    return env
+
+def _git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
+    """vault/ ディレクトリで git コマンドを実行する"""
+    return subprocess.run(
+        ["git"] + args,
+        capture_output=True, text=True,
+        check=check, cwd=VAULT_DIR,
+        env=_git_env()
+    )
+
+class CommitRequest(BaseModel):
+    message: str
+
+class CheckoutRequest(BaseModel):
+    branch: str
+
+@app.get("/api/git/status")
+def git_status(x_api_key: Optional[str] = Header(None)):
+    """現在のブランチ・変更ファイル一覧を返す"""
+    verify_api_key(x_api_key)
+    try:
+        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+        status = _git(["status", "--short"]).stdout.strip()
+        changed_files = [line for line in status.splitlines() if line]
+        return {
+            "branch": branch,
+            "changed_files": changed_files,
+            "is_clean": len(changed_files) == 0,
+        }
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"git status failed: {e.stderr}")
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="git is not installed.")
+
+@app.get("/api/git/branches")
+def git_branches(x_api_key: Optional[str] = Header(None)):
+    """ローカル + リモートのブランチ一覧を返す"""
+    verify_api_key(x_api_key)
+    try:
+        current = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+        local_raw = _git(["branch", "--format=%(refname:short)"]).stdout.strip()
+        remote_raw = _git(["branch", "-r", "--format=%(refname:short)"]).stdout.strip()
+        local = [b for b in local_raw.splitlines() if b]
+        remote = [b.replace("origin/", "") for b in remote_raw.splitlines()
+                  if b and "HEAD" not in b]
+        all_branches = sorted(set(local + remote))
+        return {
+            "current": current,
+            "branches": all_branches,
+        }
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"git branch failed: {e.stderr}")
+
+@app.post("/api/git/checkout")
+def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
+    """ブランチを切り替える。未コミット変更があればエラー。切り替え後に git pull を実行。"""
+    verify_api_key(x_api_key)
+    try:
+        # 未コミット変更チェック
+        status = _git(["status", "--short"]).stdout.strip()
+        if status:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Uncommitted changes exist. Please commit before switching branches.\n{status}"
+            )
+        # ブランチ切り替え（リモートにしかない場合は自動でトラッキング）
+        _git(["checkout", "-B", req.branch, f"origin/{req.branch}"])
+        # git pull
+        pull_result = _git(["pull", "origin", req.branch])
+        return {
+            "status": "success",
+            "branch": req.branch,
+            "pull_output": pull_result.stdout.strip(),
+        }
+    except HTTPException:
+        raise
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"git checkout failed: {e.stderr}")
+
+@app.post("/api/git/commit")
+def git_commit(req: CommitRequest, x_api_key: Optional[str] = Header(None)):
+    """すべての変更をステージして指定メッセージでコミットする"""
+    verify_api_key(x_api_key)
+    try:
+        _git(["add", "-A"])
+        result = _git(["commit", "-m", req.message])
+        return {"status": "success", "output": result.stdout.strip()}
+    except subprocess.CalledProcessError as e:
+        detail = e.stderr.strip() or e.stdout.strip()
+        raise HTTPException(status_code=500, detail=f"git commit failed: {detail}")
+
+@app.post("/api/git/push")
+def git_push(x_api_key: Optional[str] = Header(None)):
+    """現在のブランチをリモートへ push する（SSH認証）"""
+    verify_api_key(x_api_key)
+    try:
+        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+        result = _git(["push", "origin", branch])
+        return {"status": "success", "branch": branch, "output": result.stdout.strip()}
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"git push failed: {e.stderr}")
+
+@app.post("/api/git/pull")
+def git_pull(x_api_key: Optional[str] = Header(None)):
+    """現在のブランチをリモートから pull する"""
+    verify_api_key(x_api_key)
+    try:
+        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+        result = _git(["pull", "origin", branch])
+        return {"status": "success", "branch": branch, "output": result.stdout.strip()}
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"git pull failed: {e.stderr}")
+
+
 # 定期実行ワーカー
 def sync_worker():
     while True:
