@@ -29,13 +29,13 @@
 - [x] **[前提] `vault/` を git init またはリモートから clone する**
       - `git@github.com:ca5/obsidian.git` を origin として設定
       - `main` ブランチでトラッキング開始
-- [ ] `GET /api/git/status` — 現在のブランチ・変更ファイル一覧
-- [ ] `GET /api/git/branches` — ブランチ一覧（local + remote）
-- [ ] `POST /api/git/checkout` — ブランチ切り替え + git pull（未コミット変更があればエラー）
-- [ ] `POST /api/git/commit` — コミット（コミットメッセージを本文で受け取る）
-- [ ] `POST /api/git/push` — リモートへ push（SSH 認証）
-- [ ] `POST /api/git/pull` — リモートから pull
-- [ ] SSH 認証設定（`GIT_SSH_COMMAND` 環境変数経由）
+- [x] `GET /api/git/status` — 現在のブランチ・変更ファイル一覧
+- [x] `GET /api/git/branches` — ブランチ一覧（local + remote）
+- [x] `POST /api/git/checkout` — ブランチ切り替え + git pull（未コミット変更があればエラー）
+- [x] `POST /api/git/commit` — コミット（コミットメッセージを本文で受け取る）
+- [x] `POST /api/git/push` — リモートへ push（SSH 認証）
+- [x] `POST /api/git/pull` — リモートから pull
+- [x] SSH 認証設定（`GIT_SSH_COMMAND` 環境変数経由）
 - [ ] ob sync 実行中の git 操作をブロックするロック制御
 
 ---
