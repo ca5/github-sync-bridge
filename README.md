@@ -167,21 +167,49 @@ docker-compose up -d
 
 プラグインは `plugin` ディレクトリにあります。
 
-### 1. 依存関係のインストールとビルド
+### 1. 依存関係のインストール
 
 ```bash
-# プロジェクトのルートディレクトリで実行
 pnpm install
-pnpm run build:plugin
 ```
 
-### 2. Obsidianへのインストール
+### 2. ビルドして vault/ に配置（デスクトップ動作確認）
 
-1. `plugin` ディレクトリ内にある以下のファイルを、ObsidianのVault内の `.obsidian/plugins/obsidian-sync-bridge/` ディレクトリにコピーします。
-   * `main.js` (ビルドされたファイル)
-   * `manifest.json`
-2. Obsidianの設定 > コミュニティプラグイン から「セーフモード」をオフにし、インストールしたプラグインを有効化します。
-3. プラグインの設定画面を開き、Server URL (`http://localhost:8000` など) と API Key (`default-secret-key`) を入力して「Connect & Load」をクリックします。
+```bash
+pnpm run deploy:plugin
+```
+
+`plugin/main.js` と `plugin/manifest.json` がビルドされ、
+`vault/.obsidian/plugins/obsidian-sync-bridge/` に自動コピーされます。
+
+その後 Obsidian でそのVaultを開き、**設定 → コミュニティプラグイン** から有効化してください。
+
+### 3. モバイルへ届ける（Obsidian Sync 経由）
+
+```bash
+pnpm run deploy:plugin:sync
+```
+
+上記コマンドは「ビルド → vault/ にコピー → ob sync でクラウドへ push」を一括実行します。
+モバイルの Obsidian が次回起動 / 同期時にプラグインを受け取ります。
+
+> **注意:** サーバーが ob sync を実行中の場合はロックエラーになることがあります。  
+> その場合はサーバーを一時停止するか、少し待ってから再実行してください。
+
+### 4. プラグインの設定
+
+1. Obsidian の設定 → **obsidian-sync-bridge** を開く
+2. **Server URL** を入力（例: `http://10.16.125.9:8000`、モバイルの場合はMacのIPアドレス）
+3. **API Key** を入力（デフォルト: `default-secret-key`）
+4. **「Connect & Load」** をタップ
+
+### スクリプト一覧
+
+| コマンド | 内容 |
+|---|---|
+| `pnpm run build:plugin` | TypeScript をビルドするだけ |
+| `pnpm run deploy:plugin` | ビルド + `vault/.obsidian/plugins/` にコピー |
+| `pnpm run deploy:plugin:sync` | deploy:plugin + ob sync でモバイルへ配信 |
 
 ---
 
