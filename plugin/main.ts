@@ -1,28 +1,55 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting, requestUrl } from 'obsidian';
 
+// ─── 型定義 ──────────────────────────────────────────────
+
 interface SyncPluginSettings {
     serverUrl: string;
     apiKey: string;
 }
 
+interface RemoteSettings {
+    sync_obsidian_config: boolean;
+    auto_sync_interval: number;
+    github_branch_patterns: string[];
+}
+
+interface SyncStatus {
+    last_sync_at: string | null;
+    last_sync_result: 'success' | 'failed' | 'skipped' | null;
+    last_sync_message: string;
+    is_vault_ready: boolean;
+    vault_dir: string;
+}
+
+interface GitStatus {
+    branch: string;
+    changed_files: string[];
+    is_clean: boolean;
+}
+
+interface GitBranches {
+    current: string;
+    branches: string[];
+}
+
+// ─── デフォルト設定 ──────────────────────────────────────
+
 const DEFAULT_SETTINGS: SyncPluginSettings = {
     serverUrl: 'http://localhost:8000',
-    apiKey: 'default-secret-key'
-}
+    apiKey: 'default-secret-key',
+};
+
+// ─── プラグイン本体 ──────────────────────────────────────
 
 export default class SyncBridgePlugin extends Plugin {
     settings: SyncPluginSettings;
 
     async onload() {
         await this.loadSettings();
-
-        // This adds a settings tab so the user can configure various aspects of the plugin
         this.addSettingTab(new SyncSettingTab(this.app, this));
     }
 
-    onunload() {
-
-    }
+    onunload() {}
 
     async loadSettings() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -33,26 +60,170 @@ export default class SyncBridgePlugin extends Plugin {
     }
 }
 
+// ─── 設定タブ ────────────────────────────────────────────
+
 class SyncSettingTab extends PluginSettingTab {
     plugin: SyncBridgePlugin;
-    remoteSettings: any;
+
+    // サーバーから取得したデータ（未接続なら null）
+    remoteSettings: RemoteSettings | null = null;
+    syncStatus: SyncStatus | null = null;
+    gitStatus: GitStatus | null = null;
+    gitBranches: GitBranches | null = null;
+
+    // コミットメッセージ入力用
+    private commitMessage = '';
 
     constructor(app: App, plugin: SyncBridgePlugin) {
         super(app, plugin);
         this.plugin = plugin;
-        this.remoteSettings = null;
     }
 
-    async display(): Promise<void> {
-        const {containerEl} = this;
+    // ─── API ヘルパー ─────────────────────────────────────
 
+    private get headers() {
+        return { 'X-API-Key': this.plugin.settings.apiKey };
+    }
+
+    private url(path: string) {
+        return `${this.plugin.settings.serverUrl}${path}`;
+    }
+
+    private async apiGet<T>(path: string): Promise<T> {
+        const res = await requestUrl({ url: this.url(path), method: 'GET', headers: this.headers });
+        if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
+        return res.json as T;
+    }
+
+    private async apiPost<T>(path: string, body?: object): Promise<T> {
+        const res = await requestUrl({
+            url: this.url(path),
+            method: 'POST',
+            headers: { ...this.headers, 'Content-Type': 'application/json' },
+            body: body ? JSON.stringify(body) : undefined,
+        });
+        if (res.status !== 200) {
+            const detail = res.json?.detail ?? `HTTP ${res.status}`;
+            throw new Error(detail);
+        }
+        return res.json as T;
+    }
+
+    // ─── データ取得 ───────────────────────────────────────
+
+    async fetchAll() {
+        try {
+            [this.remoteSettings, this.syncStatus, this.gitStatus, this.gitBranches] =
+                await Promise.all([
+                    this.apiGet<RemoteSettings>('/api/settings'),
+                    this.apiGet<SyncStatus>('/api/sync/status'),
+                    this.apiGet<GitStatus>('/api/git/status'),
+                    this.apiGet<GitBranches>('/api/git/branches'),
+                ]);
+            new Notice('✅ サーバーに接続しました');
+        } catch (e) {
+            new Notice(`❌ 接続失敗: ${e.message}`);
+        }
+        this.display();
+    }
+
+    async refreshStatus() {
+        try {
+            [this.syncStatus, this.gitStatus, this.gitBranches] = await Promise.all([
+                this.apiGet<SyncStatus>('/api/sync/status'),
+                this.apiGet<GitStatus>('/api/git/status'),
+                this.apiGet<GitBranches>('/api/git/branches'),
+            ]);
+        } catch (e) {
+            new Notice(`ステータス更新失敗: ${e.message}`);
+        }
+        this.display();
+    }
+
+    // ─── Git 操作 ─────────────────────────────────────────
+
+    async checkoutBranch(branch: string) {
+        try {
+            new Notice(`🔀 ${branch} に切り替え中...`);
+            await this.apiPost('/api/git/checkout', { branch });
+            new Notice(`✅ ${branch} に切り替えました`);
+        } catch (e) {
+            new Notice(`❌ 切り替え失敗: ${e.message}`);
+        }
+        await this.refreshStatus();
+    }
+
+    async commitChanges() {
+        if (!this.commitMessage.trim()) {
+            new Notice('コミットメッセージを入力してください');
+            return;
+        }
+        try {
+            new Notice('📝 コミット中...');
+            await this.apiPost('/api/git/commit', { message: this.commitMessage });
+            new Notice('✅ コミットしました');
+            this.commitMessage = '';
+        } catch (e) {
+            new Notice(`❌ コミット失敗: ${e.message}`);
+        }
+        await this.refreshStatus();
+    }
+
+    async pushChanges() {
+        try {
+            new Notice('⬆️ Push 中...');
+            const result = await this.apiPost<{ branch: string }>('/api/git/push');
+            new Notice(`✅ ${result.branch} を Push しました`);
+        } catch (e) {
+            new Notice(`❌ Push 失敗: ${e.message}`);
+        }
+        await this.refreshStatus();
+    }
+
+    async pullChanges() {
+        try {
+            new Notice('⬇️ Pull 中...');
+            const result = await this.apiPost<{ branch: string; output: string }>('/api/git/pull');
+            new Notice(`✅ Pull 完了 (${result.branch})`);
+        } catch (e) {
+            new Notice(`❌ Pull 失敗: ${e.message}`);
+        }
+        await this.refreshStatus();
+    }
+
+    async forceSync() {
+        try {
+            new Notice('🔄 強制同期中...');
+            await this.apiPost('/api/sync/force');
+            new Notice('✅ 同期が完了しました');
+        } catch (e) {
+            new Notice(`❌ 同期失敗: ${e.message}`);
+        }
+        await this.refreshStatus();
+    }
+
+    async updateRemoteSettings() {
+        if (!this.remoteSettings) return;
+        try {
+            await this.apiPost('/api/settings', this.remoteSettings);
+            new Notice('✅ 設定を保存しました');
+        } catch (e) {
+            new Notice(`❌ 設定保存失敗: ${e.message}`);
+        }
+    }
+
+    // ─── UI 描画 ──────────────────────────────────────────
+
+    async display(): Promise<void> {
+        const { containerEl } = this;
         containerEl.empty();
 
-        containerEl.createEl('h2', {text: 'Sync Server Connection'});
+        // ── 接続設定 ──────────────────────────────────────
+        containerEl.createEl('h2', { text: '🔌 サーバー接続' });
 
         new Setting(containerEl)
             .setName('Server URL')
-            .setDesc('The URL of your remote sync server.')
+            .setDesc('同期サーバーの URL')
             .addText(text => text
                 .setPlaceholder('http://localhost:8000')
                 .setValue(this.plugin.settings.serverUrl)
@@ -63,138 +234,149 @@ class SyncSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('API Key')
-            .setDesc('Authentication key for the remote server.')
+            .setDesc('サーバーの認証キー')
             .addText(text => text
-                .setPlaceholder('Secret key')
+                .setPlaceholder('default-secret-key')
                 .setValue(this.plugin.settings.apiKey)
                 .onChange(async (value) => {
                     this.plugin.settings.apiKey = value;
                     await this.plugin.saveSettings();
                 }));
 
-        // Button to load remote settings
         new Setting(containerEl)
-            .setName('Connect to Server')
-            .setDesc('Load current settings from the server.')
+            .setName('接続')
+            .setDesc(this.remoteSettings ? '✅ 接続済み' : '未接続')
             .addButton(btn => btn
                 .setButtonText('Connect & Load')
-                .onClick(async () => {
-                    await this.fetchRemoteSettings();
-                }));
+                .setCta()
+                .onClick(() => this.fetchAll()));
 
-        containerEl.createEl('h2', {text: 'Remote Sync Settings'});
-
-        // These settings depend on fetching from the server
-        const settingsDiv = containerEl.createDiv('remote-settings-container');
-        this.renderRemoteSettings(settingsDiv);
-    }
-
-    async fetchRemoteSettings() {
-        try {
-            const response = await requestUrl({
-                url: `${this.plugin.settings.serverUrl}/api/settings`,
-                method: 'GET',
-                headers: {
-                    'X-API-Key': this.plugin.settings.apiKey
-                }
-            });
-
-            if (response.status === 200) {
-                this.remoteSettings = response.json;
-                new Notice('Remote settings loaded.');
-                this.display(); // Re-render to show remote settings
-            } else {
-                new Notice(`Error fetching settings: ${response.status}`);
-            }
-        } catch (error) {
-            new Notice(`Connection failed: ${error.message}`);
-        }
-    }
-
-    async updateRemoteSettings() {
         if (!this.remoteSettings) return;
 
-        try {
-            const response = await requestUrl({
-                url: `${this.plugin.settings.serverUrl}/api/settings`,
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-API-Key': this.plugin.settings.apiKey
-                },
-                body: JSON.stringify(this.remoteSettings)
-            });
+        // ── Sync ステータス ────────────────────────────────
+        containerEl.createEl('h2', { text: '📊 同期ステータス' });
 
-            if (response.status === 200) {
-                new Notice('Remote settings updated successfully.');
-            } else {
-                new Notice(`Error updating settings: ${response.status}`);
+        if (this.syncStatus) {
+            const s = this.syncStatus;
+            const resultEmoji = s.last_sync_result === 'success' ? '✅'
+                : s.last_sync_result === 'failed' ? '❌'
+                : s.last_sync_result === 'skipped' ? '⏭️' : '—';
+            const lastAt = s.last_sync_at
+                ? new Date(s.last_sync_at).toLocaleString('ja-JP')
+                : 'まだ実行されていません';
+
+            const info = containerEl.createEl('div', { cls: 'sync-status-info' });
+            info.createEl('p', { text: `${resultEmoji} 最終同期: ${lastAt}` });
+            if (s.last_sync_message) {
+                info.createEl('p', { text: `メッセージ: ${s.last_sync_message}`, cls: 'sync-status-message' });
             }
-        } catch (error) {
-            new Notice(`Update failed: ${error.message}`);
-        }
-    }
-
-    async forceSync() {
-        try {
-            new Notice('Triggering force sync...');
-            const response = await requestUrl({
-                url: `${this.plugin.settings.serverUrl}/api/sync/force`,
-                method: 'POST',
-                headers: {
-                    'X-API-Key': this.plugin.settings.apiKey
-                }
-            });
-
-            if (response.status === 200) {
-                new Notice('Force sync executed successfully.');
-            } else {
-                new Notice(`Error forcing sync: ${response.status}`);
-            }
-        } catch (error) {
-            new Notice(`Force sync failed: ${error.message}`);
-        }
-    }
-
-    renderRemoteSettings(containerEl: HTMLElement) {
-        if (!this.remoteSettings) {
-            containerEl.createEl('p', { text: 'Not connected. Click "Connect & Load" to view remote settings.' });
-            return;
+            info.createEl('p', { text: `Vault: ${s.is_vault_ready ? '✅ 準備完了' : '❌ 未準備'}` });
         }
 
         new Setting(containerEl)
-            .setName('Sync .obsidian folder')
-            .setDesc('Toggle whether the .obsidian configuration folder is synced.')
+            .setName('Obsidian Sync 強制実行')
+            .setDesc('今すぐサーバーで ob sync を実行します')
+            .addButton(btn => btn
+                .setButtonText('Force Sync')
+                .setWarning()
+                .onClick(() => this.forceSync()))
+            .addButton(btn => btn
+                .setButtonText('🔄 更新')
+                .onClick(() => this.refreshStatus()));
+
+        // ── Obsidian Sync 設定 ────────────────────────────
+        containerEl.createEl('h2', { text: '⚙️ Sync 設定' });
+
+        new Setting(containerEl)
+            .setName('.obsidian フォルダを同期する')
+            .setDesc('プラグイン・テーマ設定もサーバーと同期します')
             .addToggle(toggle => toggle
-                .setValue(this.remoteSettings.sync_obsidian_config)
+                .setValue(this.remoteSettings!.sync_obsidian_config)
                 .onChange(async (value) => {
-                    this.remoteSettings.sync_obsidian_config = value;
+                    this.remoteSettings!.sync_obsidian_config = value;
                     await this.updateRemoteSettings();
                 }));
 
         new Setting(containerEl)
-            .setName('Sync Interval (minutes)')
-            .setDesc('How often the background worker should automatically sync.')
+            .setName('自動同期の間隔（分）')
+            .setDesc('サーバーが ob sync を実行する頻度')
             .addText(text => text
-                .setValue(this.remoteSettings.auto_sync_interval.toString())
+                .setValue(this.remoteSettings!.auto_sync_interval.toString())
                 .onChange(async (value) => {
                     const num = parseInt(value, 10);
                     if (!isNaN(num) && num > 0) {
-                        this.remoteSettings.auto_sync_interval = num;
+                        this.remoteSettings!.auto_sync_interval = num;
                         await this.updateRemoteSettings();
                     }
                 }));
 
-        containerEl.createEl('h2', {text: 'Maintenance'});
+        // ── Git 操作 ──────────────────────────────────────
+        containerEl.createEl('h2', { text: '🌿 Git 操作' });
 
-        new Setting(containerEl)
-            .setName('Force Full Sync')
-            .setDesc('Manually trigger a full sync right now.')
-            .addButton(btn => btn
-                .setButtonText('Force Sync')
-                .setWarning()
-                .onClick(async () => {
-                    await this.forceSync();
-                }));
+        if (this.gitStatus && this.gitBranches) {
+            const gs = this.gitStatus;
+            const gb = this.gitBranches;
+
+            // ブランチ情報
+            const branchInfo = containerEl.createEl('div', { cls: 'git-branch-info' });
+            branchInfo.createEl('p', { text: `現在のブランチ: 🌿 ${gs.branch}` });
+            branchInfo.createEl('p', {
+                text: gs.is_clean
+                    ? '✅ 変更なし（クリーン）'
+                    : `📝 ${gs.changed_files.length} ファイルに変更あり`,
+            });
+
+            // ブランチ切り替え
+            // github_branch_patterns でフィルタ（空なら全表示）
+            const patterns = this.remoteSettings!.github_branch_patterns;
+            const filteredBranches = patterns.length > 0
+                ? gb.branches.filter(b => patterns.some(p =>
+                    p.endsWith('*') ? b.startsWith(p.slice(0, -1)) : b === p
+                ))
+                : gb.branches;
+
+            new Setting(containerEl)
+                .setName('ブランチ切り替え')
+                .setDesc('切り替え後は自動で git pull が実行されます')
+                .addDropdown(drop => {
+                    filteredBranches.forEach(b => drop.addOption(b, b));
+                    drop.setValue(gs.branch);
+                    drop.onChange(async (value) => {
+                        if (value !== gs.branch) {
+                            await this.checkoutBranch(value);
+                        }
+                    });
+                });
+
+            // コミット
+            containerEl.createEl('h3', { text: 'コミット & Push' });
+
+            new Setting(containerEl)
+                .setName('コミットメッセージ')
+                .addText(text => text
+                    .setPlaceholder('コミットメッセージを入力...')
+                    .setValue(this.commitMessage)
+                    .onChange((value) => { this.commitMessage = value; }));
+
+            new Setting(containerEl)
+                .setName('Git 操作')
+                .addButton(btn => btn
+                    .setButtonText('📝 Commit')
+                    .onClick(() => this.commitChanges()))
+                .addButton(btn => btn
+                    .setButtonText('⬆️ Push')
+                    .onClick(() => this.pushChanges()))
+                .addButton(btn => btn
+                    .setButtonText('⬇️ Pull')
+                    .onClick(() => this.pullChanges()));
+
+            // 変更ファイル一覧（変更がある場合のみ）
+            if (!gs.is_clean) {
+                const changedEl = containerEl.createEl('details');
+                changedEl.createEl('summary', { text: `変更ファイル (${gs.changed_files.length})` });
+                const ul = changedEl.createEl('ul', { cls: 'git-changed-files' });
+                gs.changed_files.forEach(f => ul.createEl('li', { text: f }));
+            }
+        }
     }
 }
