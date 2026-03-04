@@ -205,15 +205,20 @@ def git_branches(x_api_key: Optional[str] = Header(None)):
 
 @app.post("/api/git/checkout")
 def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
-    """ブランチを切り替える。未コミット変更があればエラー。切り替え後に git pull を実行。"""
+    """ブランチを切り替える。追跡済みファイルに未コミット変更があればエラー。切り替え後に git pull を実行。"""
     verify_api_key(x_api_key)
     try:
-        # 未コミット変更チェック
-        status = _git(["status", "--short"]).stdout.strip()
-        if status:
+        # 未コミット変更チェック（未追跡ファイル「??」は git checkout をブロックしないため除外）
+        status_lines = _git(["status", "--short"]).stdout.strip().splitlines()
+        tracked_changes = [line for line in status_lines if line and not line.startswith("??")]
+        if tracked_changes:
             raise HTTPException(
                 status_code=409,
-                detail=f"Uncommitted changes exist. Please commit before switching branches.\n{status}"
+                detail=(
+                    "未コミットの変更があるためブランチを切り替えられません。"
+                    "先にコミットしてください。\n"
+                    + "\n".join(tracked_changes)
+                )
             )
         # ブランチ切り替え（リモートにしかない場合は自動でトラッキング）
         _git(["checkout", "-B", req.branch, f"origin/{req.branch}"])

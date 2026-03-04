@@ -228,9 +228,9 @@ def test_git_checkout_success(mock_git):
 
 @patch("app.main._git")
 def test_git_checkout_dirty_fails(mock_git):
-    """未コミット変更がある状態では 409 を返す"""
+    """追跡済みファイルに未コミット変更がある状態では 409 を返す"""
     mock_git.side_effect = [
-        _make_proc(" M journal/2026/03/04.md\n"),  # status --short (dirty)
+        _make_proc(" M journal/2026/03/04.md\n"),  # status --short（追跡済み変更）
     ]
     response = client.post(
         "/api/git/checkout",
@@ -238,10 +238,25 @@ def test_git_checkout_dirty_fails(mock_git):
         json={"branch": "feature-x"}
     )
     assert response.status_code == 409
-    assert "Uncommitted changes" in response.json()["detail"]
-
+    assert "未コミット" in response.json()["detail"]
     # status だけが呼ばれ、checkout は呼ばれていない
     assert mock_git.call_count == 1
+
+@patch("app.main._git")
+def test_git_checkout_untracked_only_succeeds(mock_git):
+    """未追跡ファイル（??）だけの場合は checkout が通る"""
+    mock_git.side_effect = [
+        _make_proc("?? new_note.md\n"),             # status（??のみ）
+        _make_proc("Switched to branch 'feature-x'\n"),
+        _make_proc("Already up to date.\n"),
+    ]
+    response = client.post(
+        "/api/git/checkout",
+        headers={"X-API-Key": "test-secret-key"},
+        json={"branch": "feature-x"}
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
 
 # =========================================================
 # Git API: /api/git/commit
