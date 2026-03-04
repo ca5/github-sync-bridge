@@ -41,7 +41,7 @@ def test_get_settings_default():
     data = response.json()
     assert data["sync_obsidian_config"] == False
     assert data["auto_sync_interval"] == 60
-    assert data["github_branch_patterns"] == ["main", "master"]
+    assert data["github_branch_patterns"] == []
 
 def test_update_settings():
     new_settings = {

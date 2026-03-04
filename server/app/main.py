@@ -42,7 +42,7 @@ def load_settings() -> Settings:
         return Settings(
             sync_obsidian_config=False,
             auto_sync_interval=60,
-            github_branch_patterns=["main", "master"]
+            github_branch_patterns=[]
         )
 
 def save_settings(settings: Settings):
