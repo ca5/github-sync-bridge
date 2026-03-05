@@ -1,0 +1,24 @@
+# Git
+.git
+vault/
+
+# Python
+server/.venv
+server/__pycache__
+server/**/__pycache__
+server/.pytest_cache
+**/*.pyc
+
+# Node
+node_modules/
+plugin/node_modules/
+
+# ビルド成果物
+plugin/main.js
+
+# ローカル開発用データ
+server/data/
+
+# ドキュメント・設定（イメージに含めない）
+.vscode/
+*.md

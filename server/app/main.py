@@ -26,6 +26,8 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 VAULT_DIR = os.getenv("VAULT_DIR", os.path.join(_PROJECT_ROOT, "vault"))
 # ob コマンドの絶対パス（PATH に依存しないよう直接解決）
 OB_CMD = os.getenv("OB_CMD", os.path.join(_PROJECT_ROOT, "node_modules/.bin/ob"))
+# SSH 秘密鍵のパス（setup_ssh_key() で更新される場合がある）
+_GIT_SSH_KEY = os.getenv("GIT_SSH_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa"))
 
 class Settings(BaseModel):
     sync_obsidian_config: bool
@@ -146,9 +148,6 @@ def force_sync(x_api_key: Optional[str] = Header(None)):
 # -------------------------------------------------------------------
 # Git API
 # -------------------------------------------------------------------
-
-# SSH 認証用の環境変数を組み立てる
-_GIT_SSH_KEY = os.getenv("GIT_SSH_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa"))
 
 def _git_env() -> dict:
     """git コマンド実行時の環境変数（SSH 認証を含む）"""
@@ -338,6 +337,12 @@ def sync_worker():
 
 @app.on_event("startup")
 def startup_event():
+    # SSH 鍵のセットアップ（GIT_SSH_KEY 環境変数からファイルを作成）
+    setup_ssh_key()
+
+    # GitHub から vault を初期化（GITHUB_REPO_URL が設定されている場合）
+    init_vault_from_github()
+
     # 初回起動時に設定ファイルがなければ作成
     if not os.path.exists(CONFIG_FILE):
         save_settings(load_settings())
@@ -348,3 +353,78 @@ def startup_event():
     # バックグラウンドワーカー起動
     thread = threading.Thread(target=sync_worker, daemon=True)
     thread.start()
+
+
+def setup_ssh_key() -> None:
+    """
+    GIT_SSH_KEY 環境変数（PEM 形式の秘密鍵文字列）から
+    一時ファイルを作成し、_GIT_SSH_KEY グローバル変数を更新する。
+    Cloud Run では Secret Manager から env var に注入された値を利用する。
+    """
+    global _GIT_SSH_KEY
+    git_ssh_key_content = os.getenv("GIT_SSH_KEY", "")
+    if not git_ssh_key_content:
+        # 環境変数未設定: GIT_SSH_KEY_PATH のファイルをそのまま使用
+        print(f"GIT_SSH_KEY not set. Using key file: {_GIT_SSH_KEY}")
+        return
+
+    key_path = "/tmp/obsidian_sync_deploy_key"
+    with open(key_path, "w") as f:
+        # PEM 形式の改行が スペースに変わっている場合の修復（Cloud Run の env var 起因）
+        content = git_ssh_key_content.replace("\\n", "\n")
+        if not content.endswith("\n"):
+            content += "\n"
+        f.write(content)
+    os.chmod(key_path, 0o600)
+    _GIT_SSH_KEY = key_path
+    print(f"SSH key written to {key_path}")
+
+
+def init_vault_from_github() -> None:
+    """
+    起動時に GITHUB_REPO_URL が設定されている場合、
+    vault/ を GitHub リポジトリから自動初期化する。
+    - vault/.git がない → git clone
+    - vault/.git がある → git pull（最新化）
+    """
+    github_repo = os.getenv("GITHUB_REPO_URL", "")
+    if not github_repo:
+        print("GITHUB_REPO_URL not set. Skipping vault initialization from GitHub.")
+        return
+
+    # git ユーザー設定（環境変数でカスタマイズ可）
+    git_name = os.getenv("GIT_USER_NAME", "Obsidian Sync Bot")
+    git_email = os.getenv("GIT_USER_EMAIL", "obsidian-sync-bot@server")
+    subprocess.run(["git", "config", "--global", "user.name", git_name], check=False)
+    subprocess.run(["git", "config", "--global", "user.email", git_email], check=False)
+
+    git_dir = os.path.join(VAULT_DIR, ".git")
+
+    if os.path.isdir(git_dir):
+        # 既に初期化済み→ pull して最新化
+        print(f"Vault already initialized at {VAULT_DIR}. Running git pull...")
+        try:
+            result = subprocess.run(
+                ["git", "pull"],
+                capture_output=True, text=True, check=True,
+                cwd=VAULT_DIR, env=_git_env()
+            )
+            print(f"git pull successful: {result.stdout.strip()}")
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: git pull failed (continuing): {e.stderr.strip()}")
+    else:
+        # 未初期化 → git clone
+        print(f"Initializing vault from {github_repo} into {VAULT_DIR} ...")
+        os.makedirs(VAULT_DIR, exist_ok=True)
+        parent_dir = os.path.dirname(VAULT_DIR)
+        vault_name = os.path.basename(VAULT_DIR)
+        try:
+            result = subprocess.run(
+                ["git", "clone", github_repo, vault_name],
+                capture_output=True, text=True, check=True,
+                cwd=parent_dir, env=_git_env()
+            )
+            print(f"git clone successful: {result.stderr.strip()}")
+        except subprocess.CalledProcessError as e:
+            print(f"Error: git clone failed: {e.stderr.strip()}")
+            print("Vault initialization from GitHub failed. Server will start without vault.")
