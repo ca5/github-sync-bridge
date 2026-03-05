@@ -274,15 +274,19 @@ class SyncSettingTab extends PluginSettingTab {
         }
 
         new Setting(containerEl)
+            .setName('ステータス更新')
+            .setDesc('サーバーの最新状態を取得して表示を更新します')
+            .addButton(btn => btn
+                .setButtonText('🔄 更新')
+                .onClick(() => this.refreshStatus()));
+
+        new Setting(containerEl)
             .setName('Obsidian Sync 強制実行')
             .setDesc('今すぐサーバーで ob sync を実行します')
             .addButton(btn => btn
                 .setButtonText('Force Sync')
                 .setWarning()
-                .onClick(() => this.forceSync()))
-            .addButton(btn => btn
-                .setButtonText('🔄 更新')
-                .onClick(() => this.refreshStatus()));
+                .onClick(() => this.forceSync()));
 
         // ── Obsidian Sync 設定 ────────────────────────────
         containerEl.createEl('h2', { text: '⚙️ Sync 設定' });
