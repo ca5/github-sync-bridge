@@ -95,7 +95,7 @@ def check_vault_safety() -> tuple[bool, str]:
 
 def clear_sync_lock():
     """sync.lockディレクトリを削除する。
-    Obsidianが異常終了した際や、ローカルObsidianを閉じた後にロックが残る場合に尀う。
+    Obsidianが異常終了した際や、ローカルObsidianを閉じた後にロックが残る場合に使う。
     """
     sync_lock = os.path.join(VAULT_DIR, ".obsidian", ".sync.lock")
     if os.path.isdir(sync_lock):
@@ -104,6 +104,9 @@ def clear_sync_lock():
             print(f"Removed stale sync lock: {sync_lock}")
         except OSError as e:
             print(f"Warning: Could not remove sync lock: {e}")
+
+# ob sync の同時実行を防ぐロック（force_sync ↔ sync_worker の競合防止）
+_ob_sync_lock = threading.Lock()
 
 
 @app.post("/api/sync/force")
@@ -129,8 +132,10 @@ def force_sync(x_api_key: Optional[str] = Header(None)):
     sync_command = [OB_CMD, "sync"]
 
     try:
-        config_result = subprocess.run(config_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
-        sync_result = subprocess.run(sync_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
+        with _ob_sync_lock:
+            clear_sync_lock()
+            config_result = subprocess.run(config_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
+            sync_result = subprocess.run(sync_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
         output = config_result.stdout + "\n" + sync_result.stdout
         return {"status": "success", "message": "Force sync triggered successfully.", "output": output}
     except subprocess.CalledProcessError as e:
@@ -289,43 +294,44 @@ def sync_worker():
             time.sleep(interval * 60)
             continue
 
-        # sync前にロックを解放（Obsidianが終了してロックが残っている場合に対応）
-        clear_sync_lock()
+        # sync前にロックを解放してから実行（_ob_sync_lock で同時実行も防止）
+        with _ob_sync_lock:
+            clear_sync_lock()
 
-        # 1. 構成設定の更新
-        if settings.sync_obsidian_config:
-            config_command = [OB_CMD, "sync-config", "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"]
-        else:
-            config_command = [OB_CMD, "sync-config", "--configs", ""]
+            # 1. 構成設定の更新
+            if settings.sync_obsidian_config:
+                config_command = [OB_CMD, "sync-config", "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"]
+            else:
+                config_command = [OB_CMD, "sync-config", "--configs", ""]
 
-        # 2. 同期の実行
-        sync_command = [OB_CMD, "sync"]
+            # 2. 同期の実行
+            sync_command = [OB_CMD, "sync"]
 
-        try:
-            subprocess.run(config_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
-            subprocess.run(sync_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
-            print("Background sync successful.")
-            _sync_status.update({
-                "last_sync_at": datetime.now(timezone.utc).isoformat(),
-                "last_sync_result": "success",
-                "last_sync_message": "",
-            })
-        except subprocess.CalledProcessError as e:
-            msg = e.stderr.strip()
-            print(f"Background sync failed: {msg}")
-            _sync_status.update({
-                "last_sync_at": datetime.now(timezone.utc).isoformat(),
-                "last_sync_result": "failed",
-                "last_sync_message": msg,
-            })
-        except FileNotFoundError:
-            msg = "obsidian-headless (ob) is not installed or not in PATH."
-            print(msg)
-            _sync_status.update({
-                "last_sync_at": datetime.now(timezone.utc).isoformat(),
-                "last_sync_result": "failed",
-                "last_sync_message": msg,
-            })
+            try:
+                subprocess.run(config_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
+                subprocess.run(sync_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
+                print("Background sync successful.")
+                _sync_status.update({
+                    "last_sync_at": datetime.now(timezone.utc).isoformat(),
+                    "last_sync_result": "success",
+                    "last_sync_message": "",
+                })
+            except subprocess.CalledProcessError as e:
+                msg = e.stderr.strip()
+                print(f"Background sync failed: {msg}")
+                _sync_status.update({
+                    "last_sync_at": datetime.now(timezone.utc).isoformat(),
+                    "last_sync_result": "failed",
+                    "last_sync_message": msg,
+                })
+            except FileNotFoundError:
+                msg = "obsidian-headless (ob) is not installed or not in PATH."
+                print(msg)
+                _sync_status.update({
+                    "last_sync_at": datetime.now(timezone.utc).isoformat(),
+                    "last_sync_result": "failed",
+                    "last_sync_message": msg,
+                })
 
         # 次のインターバルまで待機
         time.sleep(interval * 60)
