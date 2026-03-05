@@ -12,9 +12,10 @@ set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
 
-# obsidian-headless がトークンを保存するパス（Linux / macOS 共通）
-LINUX_TOKEN_PATH="$HOME/.config/obsidian-headless/auth_token"
-MACOS_TOKEN_PATH="$HOME/Library/Application Support/obsidian-headless/auth_token"
+# obsidian-headless がトークンを保存するパス
+# 参考: https://forum.obsidian.md/t/headless-sync-how-to-get-obsidian-auth-token-variable/111740/
+# ~/.obsidian-headless/auth_token （バージョンによって ~/.config/obsidian-headless/ の場合もある）
+DEFAULT_TOKEN_PATH="$HOME/.obsidian-headless/auth_token"
 
 echo "========================================"
 echo " Obsidian Sync 認証トークン セットアップ"
@@ -46,12 +47,13 @@ echo ""
 echo "▶ Step 2/4  認証トークンを取得"
 
 TOKEN_FILE=""
-if [[ -f "$LINUX_TOKEN_PATH" ]]; then
-    TOKEN_FILE="$LINUX_TOKEN_PATH"
-elif [[ -f "$MACOS_TOKEN_PATH" ]]; then
-    TOKEN_FILE="$MACOS_TOKEN_PATH"
+
+# 1. デフォルトパスを确認（フォーラム記載の ~/.config/obsidian-headless/auth_token）
+if [[ -f "$DEFAULT_TOKEN_PATH" ]]; then
+    TOKEN_FILE="$DEFAULT_TOKEN_PATH"
 else
-    # find コマンドで検索
+    # 2. find で検索（場合によって場所が异なる可能性がある）
+    echo "  デフォルトパスに見つかりません。find で検索中..."
     FOUND=$(find ~ -path "*obsidian-headless*auth_token" 2>/dev/null | head -1)
     if [[ -n "$FOUND" ]]; then
         TOKEN_FILE="$FOUND"
@@ -61,8 +63,7 @@ fi
 if [[ -z "$TOKEN_FILE" ]]; then
     echo "  ❌ トークンファイルが見つかりません"
     echo "  以下のパスを確認してください:"
-    echo "    $LINUX_TOKEN_PATH"
-    echo "    $MACOS_TOKEN_PATH"
+    echo "    $DEFAULT_TOKEN_PATH"
     echo "  または: find ~ -path '*obsidian-headless*' 2>/dev/null"
     exit 1
 fi

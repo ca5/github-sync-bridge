@@ -468,8 +468,9 @@ def setup_obsidian_auth() -> None:
         print("OBSIDIAN_AUTH_TOKEN not set. Obsidian Sync may not work without authentication.")
         return
 
-    # obsidian-headless がトークンを読むパス（Linux / Cloud Run）
-    auth_dir = os.path.expanduser("~/.config/obsidian-headless")
+    # obsidian-headless がトークンを読むパス
+    # 参考: https://forum.obsidian.md/t/headless-sync-how-to-get-obsidian-auth-token-variable/111740/
+    auth_dir = os.path.expanduser("~/.obsidian-headless")
     os.makedirs(auth_dir, exist_ok=True)
     auth_file = os.path.join(auth_dir, "auth_token")
 
