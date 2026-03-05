@@ -65,10 +65,15 @@ def get_settings(x_api_key: Optional[str] = Header(None)):
 def get_sync_status(x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
     safe, reason = check_vault_safety()
+    # Obsidian Sync が設定済みか（ob sync-setup 済みなら .obsidian/.sync.lock が作られた実績がある）
+    # 簡易判定: vault/.obsidian/sync.json の存在で確認
+    ob_sync_conf = os.path.exists(os.path.join(VAULT_DIR, ".obsidian", "sync.json"))
     return {
         **_sync_status,
         "is_vault_ready": safe,
         "vault_dir": VAULT_DIR,
+        "ob_sync_configured": ob_sync_conf,
+        "github_repo_url": os.getenv("GITHUB_REPO_URL", ""),
     }
 
 @app.post("/api/settings", response_model=Settings)
@@ -141,7 +146,7 @@ def force_sync(x_api_key: Optional[str] = Header(None)):
         output = config_result.stdout + "\n" + sync_result.stdout
         return {"status": "success", "message": "Force sync triggered successfully.", "output": output}
     except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"Sync failed: {e.stderr}")
+        raise HTTPException(status_code=500, detail=f"Sync failed: {_trim_error(e.stderr)}")
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="obsidian-headless (ob) is not installed or not in PATH.")
 
@@ -154,6 +159,20 @@ def _git_env() -> dict:
     env = os.environ.copy()
     env["GIT_SSH_COMMAND"] = f"ssh -i {_GIT_SSH_KEY} -o StrictHostKeyChecking=no"
     return env
+
+def _trim_error(stderr: str, max_len: int = 200) -> str:
+    """
+    ob sync / git のエラーメッセージを読みやすく切り詰める。
+    Node.js のミニファイコードが stderr に入り込む場合に対応。
+    - 最初の意味のある行（スペース・空行ではない行）だけを返す
+    - max_len 文字を超えた場合は切り捨てる
+    """
+    if not stderr:
+        return "(no error message)"
+    # 意味のある行（空でない行）だけを抽出
+    meaningful = [line for line in stderr.strip().splitlines() if line.strip()]
+    first_line = meaningful[0] if meaningful else stderr.strip()
+    return first_line[:max_len] + ("..." if len(first_line) > max_len else "")
 
 def _git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     """vault/ ディレクトリで git コマンドを実行する"""
@@ -316,7 +335,7 @@ def sync_worker():
                     "last_sync_message": "",
                 })
             except subprocess.CalledProcessError as e:
-                msg = e.stderr.strip()
+                msg = _trim_error(e.stderr)
                 print(f"Background sync failed: {msg}")
                 _sync_status.update({
                     "last_sync_at": datetime.now(timezone.utc).isoformat(),
