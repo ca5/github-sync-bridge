@@ -9,13 +9,24 @@ set -euo pipefail
 # 設定（環境に合わせて変更してください）
 # ──────────────────────────────────────────────────────────────────────────────
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project)}"
-REGION="${REGION:-asia-northeast1}"
+REGION="${REGION:-us-central1}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-$HOME/.ssh/id_rsa}"  # GitHub SSH 秘密鍵のパス
 
 echo "Project: $PROJECT_ID"
 echo "Region:  $REGION"
 echo "SSH key: $SSH_KEY_PATH"
 echo ""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 必要な GCP API を有効化
+# ──────────────────────────────────────────────────────────────────────────────
+echo "=== GCP API の有効化 ==="
+gcloud services enable secretmanager.googleapis.com --project="$PROJECT_ID" --quiet
+echo "  ✅ Secret Manager API"
+gcloud services enable run.googleapis.com --project="$PROJECT_ID" --quiet
+echo "  ✅ Cloud Run API"
+gcloud services enable artifactregistry.googleapis.com --project="$PROJECT_ID" --quiet
+echo "  ✅ Artifact Registry API"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Secret 1: API_KEY
@@ -69,18 +80,31 @@ fi
 echo ""
 echo "=== Cloud Run サービスアカウントへの権限付与 ==="
 
-# Cloud Run のデフォルトサービスアカウント
-SA="${PROJECT_ID}@appspot.gserviceaccount.com"
-# または compute エンジンのデフォルト SA を使う場合:
-# SA="$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')-compute@developer.gserviceaccount.com"
+# プロジェクト番号を取得
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+
+# Cloud Run が使うサービスアカウント一覧
+# - Compute Engine デフォルト SA（Cloud Run のデフォルト）
+# - App Engine デフォルト SA（旧プロジェクトで使われる場合あり）
+SERVICE_ACCOUNTS=(
+    "${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+    "${PROJECT_ID}@appspot.gserviceaccount.com"
+)
 
 for secret in obsidian-sync-api-key obsidian-sync-git-ssh-key; do
-    gcloud secrets add-iam-policy-binding "$secret" \
-        --member="serviceAccount:$SA" \
-        --role="roles/secretmanager.secretAccessor" \
-        --project="$PROJECT_ID" \
-        --quiet
-    echo "  ✅ $secret → $SA にアクセス権付与"
+    for sa in "${SERVICE_ACCOUNTS[@]}"; do
+        # SA が存在するか確認してから付与（存在しない SA へのバインドはエラーになる）
+        if gcloud iam service-accounts describe "$sa" --project="$PROJECT_ID" &>/dev/null; then
+            gcloud secrets add-iam-policy-binding "$secret" \
+                --member="serviceAccount:$sa" \
+                --role="roles/secretmanager.secretAccessor" \
+                --project="$PROJECT_ID" \
+                --quiet
+            echo "  ✅ $secret → $sa"
+        else
+            echo "  ⚠️  スキップ（存在しない SA）: $sa"
+        fi
+    done
 done
 
 echo ""

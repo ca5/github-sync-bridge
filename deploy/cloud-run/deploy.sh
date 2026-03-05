@@ -15,7 +15,7 @@ set -euo pipefail
 
 # ─── 設定（必要に応じて変更してください）───────────────────────────────────
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
-REGION="${REGION:-asia-northeast1}"
+REGION="${REGION:-us-central1}"
 SERVICE_NAME="${SERVICE_NAME:-obsidian-sync-server}"
 REPO="${REPO:-obsidian-sync}"                        # Artifact Registry リポジトリ名
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-}"               # 例: git@github.com:ca5/obsidian.git

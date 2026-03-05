@@ -162,6 +162,53 @@ gcloud builds submit . \
 
 ## トラブルシューティング
 
+### ❌ Secret Manager API has not been used … or it is disabled
+
+```
+ERROR: Secret Manager API has not been used in project ... before or it is disabled.
+```
+
+**原因**: プロジェクトで Secret Manager API が有効化されていない。
+
+**対処**: `setup-secrets.sh` を実行すると自動で有効化されます。手動で有効化する場合：
+
+```bash
+gcloud services enable secretmanager.googleapis.com --project=YOUR_PROJECT_ID
+```
+
+---
+
+### ❌ Permission denied on secret ... for Revision service account PROJECT_NUMBER-compute@developer.gserviceaccount.com
+
+```
+ERROR: Permission denied on secret: ... for Revision service account
+1087279555743-compute@developer.gserviceaccount.com
+```
+
+**原因**:  
+Cloud Run はデフォルトで **Compute Engine デフォルト SA**（`PROJECT_NUMBER-compute@developer.gserviceaccount.com`）を使いますが、`setup-secrets.sh` の旧バージョンでは **App Engine SA**（`PROJECT_ID@appspot.gserviceaccount.com`）にしか権限を付与していませんでした。
+
+**対処**: `setup-secrets.sh` の最新版を実行すると、両方の SA に自動で権限を付与します。
+
+```bash
+bash deploy/cloud-run/setup-secrets.sh
+```
+
+手動で付与する場合：
+
+```bash
+PROJECT_NUMBER=$(gcloud projects describe YOUR_PROJECT_ID --format='value(projectNumber)')
+SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+for secret in obsidian-sync-api-key obsidian-sync-git-ssh-key; do
+    gcloud secrets add-iam-policy-binding $secret \
+        --member="serviceAccount:$SA" \
+        --role="roles/secretmanager.secretAccessor"
+done
+```
+
+---
+
 ### vault の clone に失敗する
 
 Cloud Run のログを確認：
@@ -176,10 +223,14 @@ gcloud logging read \
 - SSH 鍵が GitHub Deploy Keys に登録されていない（Read/Write 権限を要確認）
 - `GITHUB_REPO_URL` が HTTPS 形式になっている → SSH 形式 `git@github.com:...` で指定
 
+---
+
 ### config.json が再起動のたびにリセットされる
 
 Cloud Run はステートレスのため、コンテナ再起動で `/app/server/data/config.json` が消えます。  
 設定の永続化には Cloud Storage Volume Mount の利用を検討してください（将来の課題）。
+
+---
 
 ### M1/M2 Mac でビルドしたイメージが動かない
 
