@@ -19,6 +19,7 @@ REGION="${REGION:-us-central1}"
 SERVICE_NAME="${SERVICE_NAME:-obsidian-sync-server}"
 REPO="${REPO:-obsidian-sync}"                        # Artifact Registry リポジトリ名
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-}"               # 例: git@github.com:ca5/obsidian.git
+OBSIDIAN_VAULT_ID="${OBSIDIAN_VAULT_ID:-}"           # ob sync-list-remote で確認した Vault ID
 
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${SERVICE_NAME}"
 
@@ -98,8 +99,10 @@ gcloud run deploy "$SERVICE_NAME" \
     --set-env-vars="OB_CMD=/app/node_modules/.bin/ob" \
     --set-env-vars="CONFIG_FILE=/app/server/data/config.json" \
     --set-env-vars="GITHUB_REPO_URL=${GITHUB_REPO_URL}" \
+    --set-env-vars="OBSIDIAN_VAULT_ID=${OBSIDIAN_VAULT_ID}" \
     --update-secrets="API_KEY=obsidian-sync-api-key:latest" \
     --update-secrets="GIT_SSH_KEY=obsidian-sync-git-ssh-key:latest" \
+    --update-secrets="OBSIDIAN_AUTH_TOKEN=obsidian-sync-auth-token:latest" \
     --project="$PROJECT_ID" \
     --quiet
 echo "  ✅ 完了"

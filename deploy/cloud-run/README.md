@@ -55,13 +55,28 @@ cat ~/.ssh/obsidian_sync_deploy.pub
 # → GitHub リポジトリ → Settings → Deploy keys → Add deploy key
 ```
 
-### ③  Secret Manager にシークレットを登録
+### ③  GCP シークレット（API Key・SSH 鍵）を登録
 
 ```bash
-# SSH 鍵のパスを環境変数で指定して実行
 SSH_KEY_PATH=~/.ssh/obsidian_sync_deploy \
   bash deploy/cloud-run/setup-secrets.sh
 ```
+
+### ④  Obsidian Sync 認証トークンを取得・登録
+
+Obsidian Sync を Cloud Run で使うには、ローカルで `ob login` を実行してトークンを取得し、Secret Manager に登録する必要があります。
+
+```bash
+bash deploy/cloud-run/setup-obsidian-auth.sh
+```
+
+このスクリプトが行うこと：
+1. `ob login` をインタラクティブに実行（メールアドレス・パスワード・MFA を入力）
+2. `~/.config/obsidian-headless/auth_token` からトークンを取得
+3. Secret Manager の `obsidian-sync-auth-token` に登録
+4. `ob sync-list-remote` で Vault ID を表示（次のステップで使用）
+
+> ⚠️ `ob logout` を実行するとトークンが無効になります。その場合はこのスクリプトを再実行してください。
 
 ---
 
@@ -69,6 +84,7 @@ SSH_KEY_PATH=~/.ssh/obsidian_sync_deploy \
 
 ```bash
 GITHUB_REPO_URL=git@github.com:YOUR_USER/YOUR_REPO.git \
+OBSIDIAN_VAULT_ID=<setup-obsidian-auth.sh で表示された Vault ID> \
   bash deploy/cloud-run/deploy.sh
 ```
 

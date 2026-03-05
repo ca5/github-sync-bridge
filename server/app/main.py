@@ -359,8 +359,14 @@ def startup_event():
     # SSH 鍵のセットアップ（GIT_SSH_KEY 環境変数からファイルを作成）
     setup_ssh_key()
 
+    # Obsidian 認証トークンの復元（OBSIDIAN_AUTH_TOKEN 環境変数から）
+    setup_obsidian_auth()
+
     # GitHub から vault を初期化（GITHUB_REPO_URL が設定されている場合）
     init_vault_from_github()
+
+    # Obsidian Sync の vault セットアップ（OBSIDIAN_VAULT_ID が設定されている場合）
+    setup_obsidian_vault()
 
     # 初回起動時に設定ファイルがなければ作成
     if not os.path.exists(CONFIG_FILE):
@@ -445,5 +451,56 @@ def init_vault_from_github() -> None:
             )
             print(f"git clone successful: {result.stderr.strip()}")
         except subprocess.CalledProcessError as e:
-            print(f"Error: git clone failed: {e.stderr.strip()}")
+            print(f"git clone failed: {e.stderr.strip()}")
             print("Vault initialization from GitHub failed. Server will start without vault.")
+
+
+def setup_obsidian_auth() -> None:
+    """
+    OBSIDIAN_AUTH_TOKEN 環境変数から Obsidian の認証トークンを復元する。
+    obsidian-headless は ~/.config/obsidian-headless/auth_token を読む。
+    Cloud Run では Secret Manager 経由でこの env var に注入する。
+
+    参考: https://forum.obsidian.md/t/headless-sync-how-to-get-obsidian-auth-token-variable/111740/2
+    """
+    token = os.getenv("OBSIDIAN_AUTH_TOKEN", "")
+    if not token:
+        print("OBSIDIAN_AUTH_TOKEN not set. Obsidian Sync may not work without authentication.")
+        return
+
+    # obsidian-headless がトークンを読むパス（Linux / Cloud Run）
+    auth_dir = os.path.expanduser("~/.config/obsidian-headless")
+    os.makedirs(auth_dir, exist_ok=True)
+    auth_file = os.path.join(auth_dir, "auth_token")
+
+    with open(auth_file, "w") as f:
+        f.write(token.strip())
+    os.chmod(auth_file, 0o600)
+    print(f"Obsidian auth token written to: {auth_file}")
+
+
+def setup_obsidian_vault() -> None:
+    """
+    OBSIDIAN_VAULT_ID が設定されていて、かつ vault の sync 設定がされていない場合に
+    ob sync-setup を実行して Obsidian Sync を使えるようにする。
+
+    ob sync-setup は同じ vault ID + path の組み合わせで何度実行しても安全。
+    """
+    vault_id = os.getenv("OBSIDIAN_VAULT_ID", "")
+    if not vault_id:
+        print("OBSIDIAN_VAULT_ID not set. Skipping ob sync-setup.")
+        return
+
+    print(f"Running ob sync-setup for vault: {vault_id} -> {VAULT_DIR}")
+    try:
+        result = subprocess.run(
+            [OB_CMD, "sync-setup", "--vault", vault_id, "--path", VAULT_DIR],
+            capture_output=True, text=True, check=True,
+            cwd=VAULT_DIR
+        )
+        print(f"ob sync-setup successful: {result.stdout.strip()}")
+    except subprocess.CalledProcessError as e:
+        print(f"ob sync-setup failed: {_trim_error(e.stderr)}")
+        print("Obsidian Sync may not work. Check OBSIDIAN_VAULT_ID and OBSIDIAN_AUTH_TOKEN.")
+    except FileNotFoundError:
+        print(f"ob command not found at: {OB_CMD}")
