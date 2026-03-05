@@ -74,9 +74,35 @@ class SyncSettingTab extends PluginSettingTab {
     // コミットメッセージ入力用
     private commitMessage = '';
 
+    // ステータス自動更新のインターバル ID
+    private pollIntervalId: number | null = null;
+    private readonly POLL_INTERVAL_MS = 30_000; // 30秒ごとに更新
+
     constructor(app: App, plugin: SyncBridgePlugin) {
         super(app, plugin);
         this.plugin = plugin;
+    }
+
+    // タブが開いている限り、定期ポーリングでステータスを自動更新する
+    private startPolling() {
+        this.stopPolling();
+        this.pollIntervalId = window.setInterval(async () => {
+            if (this.remoteSettings) {
+                await this.refreshStatus();
+            }
+        }, this.POLL_INTERVAL_MS);
+    }
+
+    private stopPolling() {
+        if (this.pollIntervalId !== null) {
+            window.clearInterval(this.pollIntervalId);
+            this.pollIntervalId = null;
+        }
+    }
+
+    // タブが閉じられたときにポーリングを停止
+    hide() {
+        this.stopPolling();
     }
 
     // ─── API ヘルパー ─────────────────────────────────────
@@ -121,6 +147,7 @@ class SyncSettingTab extends PluginSettingTab {
                     this.apiGet<GitBranches>('/api/git/branches'),
                 ]);
             new Notice('✅ サーバーに接続しました');
+            this.startPolling(); // 接続成功後にポーリング開始
         } catch (e) {
             new Notice(`❌ 接続失敗: ${e.message}`);
         }
