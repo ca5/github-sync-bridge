@@ -18,6 +18,18 @@ _sync_status = {
     "is_vault_ready": False,    # Vaultが同期可能な状態か
 }
 
+# 起動時のログ（最新 50 件）— プラグイン側から /api/sync/status で参照可能
+_startup_log: list[str] = []
+
+def _log(msg: str) -> None:
+    """startup中のメッセージを標準出力とメモリ両方に記録する"""
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    line = f"[{ts}] {msg}"
+    print(line)
+    _startup_log.append(line)
+    if len(_startup_log) > 50:
+        _startup_log.pop(0)
+
 CONFIG_FILE = os.getenv("CONFIG_FILE", "./data/config.json")
 API_KEY = os.getenv("API_KEY", "default-secret-key")
 # ob sync-setup を実行したVaultのディレクトリ
@@ -65,15 +77,16 @@ def get_settings(x_api_key: Optional[str] = Header(None)):
 def get_sync_status(x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
     safe, reason = check_vault_safety()
-    # Obsidian Sync が設定済みか（ob sync-setup 済みなら .obsidian/.sync.lock が作られた実績がある）
-    # 簡易判定: vault/.obsidian/sync.json の存在で確認
     ob_sync_conf = os.path.exists(os.path.join(VAULT_DIR, ".obsidian", "sync.json"))
+    ob_auth_conf = _is_ob_auth_configured()
     return {
         **_sync_status,
         "is_vault_ready": safe,
         "vault_dir": VAULT_DIR,
         "ob_sync_configured": ob_sync_conf,
+        "ob_auth_configured": ob_auth_conf,
         "github_repo_url": os.getenv("GITHUB_REPO_URL", ""),
+        "startup_log": _startup_log[-20:],   # 最新20件
     }
 
 @app.post("/api/settings", response_model=Settings)
@@ -163,16 +176,40 @@ def _git_env() -> dict:
 def _trim_error(stderr: str, max_len: int = 200) -> str:
     """
     ob sync / git のエラーメッセージを読みやすく切り詰める。
-    Node.js のミニファイコードが stderr に入り込む場合に対応。
-    - 最初の意味のある行（スペース・空行ではない行）だけを返す
-    - max_len 文字を超えた場合は切り捨てる
+    Node.js のミニファイコード / ファイルパスが stderr に入り込む場合に対応。
+    優先度: Error: を含む行 > ファイルパス以外の行 > 最初の行
     """
+    import re
     if not stderr:
         return "(no error message)"
-    # 意味のある行（空でない行）だけを抽出
-    meaningful = [line for line in stderr.strip().splitlines() if line.strip()]
-    first_line = meaningful[0] if meaningful else stderr.strip()
-    return first_line[:max_len] + ("..." if len(first_line) > max_len else "")
+    lines = [l for l in stderr.strip().splitlines() if l.strip()]
+    if not lines:
+        return stderr.strip()[:max_len]
+
+    def _is_js_path(line: str) -> bool:
+        # ".js:7" や ".ts:12" などファイルパスとみなせる行
+        return bool(re.search(r'\.(js|ts):\d+', line))
+
+    def _is_minified(line: str) -> bool:
+        # 80 文字以上かつセミコロンが多い行 = ミニファイコード
+        return len(line) > 80 and line.count(';') > 5
+
+    # Error: を含む行を優先
+    error_lines = [l for l in lines if 'Error' in l or 'error:' in l.lower()]
+    if error_lines:
+        best = error_lines[0]
+    else:
+        # JSファイルパスとミニファイ行を除いた最初の行
+        readable = [l for l in lines if not _is_js_path(l) and not _is_minified(l)]
+        best = readable[0] if readable else lines[0]
+
+    return best[:max_len] + ("..." if len(best) > max_len else "")
+
+
+def _is_ob_auth_configured() -> bool:
+    """~/.obsidian-headless/auth_token が存在し有容頭かを確認"""
+    auth_file = os.path.expanduser("~/.obsidian-headless/auth_token")
+    return os.path.isfile(auth_file) and os.path.getsize(auth_file) > 0
 
 def _git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     """vault/ ディレクトリで git コマンドを実行する"""
@@ -312,6 +349,21 @@ def sync_worker():
             time.sleep(interval * 60)
             continue
 
+        # 認証チェック: トークン未設定の場合は ob sync をスキップ
+        if not _is_ob_auth_configured():
+            msg = (
+                "Obsidian 認証未設定: ~/.obsidian-headless/auth_token がありません。"
+                "setup-obsidian-auth.sh を実行して OBSIDIAN_AUTH_TOKEN を登録してください。"
+            )
+            print(f"Background sync skipped: {msg}")
+            _sync_status.update({
+                "last_sync_at": datetime.now(timezone.utc).isoformat(),
+                "last_sync_result": "skipped",
+                "last_sync_message": msg,
+            })
+            time.sleep(interval * 60)
+            continue
+
         # sync前にロックを解放してから実行（_ob_sync_lock で同時実行も防止）
         with _ob_sync_lock:
             clear_sync_lock()
@@ -390,7 +442,7 @@ def setup_ssh_key() -> None:
     git_ssh_key_content = os.getenv("GIT_SSH_KEY", "")
     if not git_ssh_key_content:
         # 環境変数未設定: GIT_SSH_KEY_PATH のファイルをそのまま使用
-        print(f"GIT_SSH_KEY not set. Using key file: {_GIT_SSH_KEY}")
+        _log(f"GIT_SSH_KEY not set. Using key file: {_GIT_SSH_KEY}")
         return
 
     key_path = "/tmp/obsidian_sync_deploy_key"
@@ -402,7 +454,7 @@ def setup_ssh_key() -> None:
         f.write(content)
     os.chmod(key_path, 0o600)
     _GIT_SSH_KEY = key_path
-    print(f"SSH key written to {key_path}")
+    _log(f"SSH key written to {key_path}")
 
 
 def init_vault_from_github() -> None:
@@ -414,7 +466,7 @@ def init_vault_from_github() -> None:
     """
     github_repo = os.getenv("GITHUB_REPO_URL", "")
     if not github_repo:
-        print("GITHUB_REPO_URL not set. Skipping vault initialization from GitHub.")
+        _log("GITHUB_REPO_URL not set. Skipping vault initialization from GitHub.")
         return
 
     # git ユーザー設定（環境変数でカスタマイズ可）
@@ -427,19 +479,19 @@ def init_vault_from_github() -> None:
 
     if os.path.isdir(git_dir):
         # 既に初期化済み→ pull して最新化
-        print(f"Vault already initialized at {VAULT_DIR}. Running git pull...")
+        _log(f"Vault already initialized at {VAULT_DIR}. Running git pull...")
         try:
             result = subprocess.run(
                 ["git", "pull"],
                 capture_output=True, text=True, check=True,
                 cwd=VAULT_DIR, env=_git_env()
             )
-            print(f"git pull successful: {result.stdout.strip()}")
+            _log(f"git pull successful: {result.stdout.strip()}")
         except subprocess.CalledProcessError as e:
-            print(f"Warning: git pull failed (continuing): {e.stderr.strip()}")
+            _log(f"Warning: git pull failed (continuing): {e.stderr.strip()}")
     else:
         # 未初期化 → git clone
-        print(f"Initializing vault from {github_repo} into {VAULT_DIR} ...")
+        _log(f"Initializing vault from {github_repo} into {VAULT_DIR} ...")
         os.makedirs(VAULT_DIR, exist_ok=True)
         parent_dir = os.path.dirname(VAULT_DIR)
         vault_name = os.path.basename(VAULT_DIR)
@@ -449,10 +501,10 @@ def init_vault_from_github() -> None:
                 capture_output=True, text=True, check=True,
                 cwd=parent_dir, env=_git_env()
             )
-            print(f"git clone successful: {result.stderr.strip()}")
+            _log(f"git clone successful: {result.stderr.strip()}")
         except subprocess.CalledProcessError as e:
-            print(f"git clone failed: {e.stderr.strip()}")
-            print("Vault initialization from GitHub failed. Server will start without vault.")
+            _log(f"git clone failed: {e.stderr.strip()}")
+            _log("Vault initialization from GitHub failed. Server will start without vault.")
 
 
 def setup_obsidian_auth() -> None:
@@ -465,7 +517,7 @@ def setup_obsidian_auth() -> None:
     """
     token = os.getenv("OBSIDIAN_AUTH_TOKEN", "")
     if not token:
-        print("OBSIDIAN_AUTH_TOKEN not set. Obsidian Sync may not work without authentication.")
+        _log("OBSIDIAN_AUTH_TOKEN not set. Obsidian Sync may not work without authentication.")
         return
 
     # obsidian-headless がトークンを読むパス
@@ -477,7 +529,7 @@ def setup_obsidian_auth() -> None:
     with open(auth_file, "w") as f:
         f.write(token.strip())
     os.chmod(auth_file, 0o600)
-    print(f"Obsidian auth token written to: {auth_file}")
+    _log(f"Obsidian auth token written to: {auth_file}")
 
 
 def setup_obsidian_vault() -> None:
@@ -489,19 +541,19 @@ def setup_obsidian_vault() -> None:
     """
     vault_id = os.getenv("OBSIDIAN_VAULT_ID", "")
     if not vault_id:
-        print("OBSIDIAN_VAULT_ID not set. Skipping ob sync-setup.")
+        _log("OBSIDIAN_VAULT_ID not set. Skipping ob sync-setup.")
         return
 
-    print(f"Running ob sync-setup for vault: {vault_id} -> {VAULT_DIR}")
+    _log(f"Running ob sync-setup for vault: {vault_id} -> {VAULT_DIR}")
     try:
         result = subprocess.run(
             [OB_CMD, "sync-setup", "--vault", vault_id, "--path", VAULT_DIR],
             capture_output=True, text=True, check=True,
             cwd=VAULT_DIR
         )
-        print(f"ob sync-setup successful: {result.stdout.strip()}")
+        _log(f"ob sync-setup successful: {result.stdout.strip()}")
     except subprocess.CalledProcessError as e:
-        print(f"ob sync-setup failed: {_trim_error(e.stderr)}")
-        print("Obsidian Sync may not work. Check OBSIDIAN_VAULT_ID and OBSIDIAN_AUTH_TOKEN.")
+        _log(f"ob sync-setup failed: {_trim_error(e.stderr)}")
+        _log("Obsidian Sync may not work. Check OBSIDIAN_VAULT_ID and OBSIDIAN_AUTH_TOKEN.")
     except FileNotFoundError:
-        print(f"ob command not found at: {OB_CMD}")
+        _log(f"ob command not found at: {OB_CMD}")

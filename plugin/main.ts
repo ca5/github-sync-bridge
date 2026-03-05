@@ -18,6 +18,9 @@ interface SyncStatus {
     last_sync_result: 'success' | 'failed' | 'skipped' | null;
     last_sync_message: string;
     is_vault_ready: boolean;
+    ob_auth_configured: boolean;
+    ob_sync_configured: boolean;
+    startup_log: string[];
     vault_dir: string;
 }
 
@@ -271,6 +274,21 @@ class SyncSettingTab extends PluginSettingTab {
                 info.createEl('p', { text: `メッセージ: ${s.last_sync_message}`, cls: 'sync-status-message' });
             }
             info.createEl('p', { text: `Vault: ${s.is_vault_ready ? '✅ 準備完了' : '❌ 未準備'}` });
+
+            // Obsidian 認証状態
+            if (!s.ob_auth_configured) {
+                const warn = info.createEl('div', { cls: 'sync-status-warning' });
+                warn.createEl('p', { text: '⚠️ Obsidian 認証未設定' });
+                warn.createEl('p', { text: 'setup-obsidian-auth.sh を実行して OBSIDIAN_AUTH_TOKEN を登録してください。', cls: 'sync-status-message' });
+            }
+
+            // スタートアップログ（折りたたみ）
+            if (s.startup_log && s.startup_log.length > 0) {
+                const details = info.createEl('details');
+                details.createEl('summary', { text: `🪵 サーバー起動ログ (${s.startup_log.length} 件)` });
+                const pre = details.createEl('pre', { cls: 'sync-startup-log' });
+                pre.setText(s.startup_log.join('\n'));
+            }
         }
 
         new Setting(containerEl)
