@@ -29,31 +29,22 @@
 
 ---
 
-## 事前準備
+## 事前準備（初回のみ）
 
-### 必要なツール
+### ①  必要なツール
 
 ```bash
 # Google Cloud SDK
 brew install google-cloud-sdk
 
-# ログイン
+# ログイン & プロジェクト設定
 gcloud auth login
 gcloud config set project YOUR_PROJECT_ID
 ```
 
-### Artifact Registry リポジトリの作成
+### ② GitHub SSH 鍵の準備
 
-```bash
-gcloud artifacts repositories create obsidian-sync \
-  --repository-format=docker \
-  --location=asia-northeast1 \
-  --description="Obsidian Sync Server"
-```
-
-### GitHub SSH 鍵の準備
-
-サーバーがリポジトリに `git push` できる権限を持つ SSH 鍵が必要です。
+サーバーがリポジトリに `git push` できる SSH 鍵が必要です。
 
 ```bash
 # 専用鍵ペアの生成（既存の鍵を使う場合はスキップ）
@@ -64,66 +55,89 @@ cat ~/.ssh/obsidian_sync_deploy.pub
 # → GitHub リポジトリ → Settings → Deploy keys → Add deploy key
 ```
 
+### ③  Secret Manager にシークレットを登録
+
+```bash
+# SSH 鍵のパスを環境変数で指定して実行
+SSH_KEY_PATH=~/.ssh/obsidian_sync_deploy \
+  bash deploy/cloud-run/setup-secrets.sh
+```
+
 ---
 
-## デプロイ手順
-
-### ステップ 1: Secret Manager にシークレットを登録
+## デプロイ手順（スクリプト一発）
 
 ```bash
-cd path/to/obsidian-github-remote
-
-# SSH 鍵のパスを指定して実行
-SSH_KEY_PATH=~/.ssh/obsidian_sync_deploy bash deploy/cloud-run/setup-secrets.sh
+GITHUB_REPO_URL=git@github.com:YOUR_USER/YOUR_REPO.git \
+  bash deploy/cloud-run/deploy.sh
 ```
 
-### ステップ 2: Cloud Build でビルド & デプロイ
+以上です。次のような出力とともに Service URL が表示されます：
 
-```bash
-gcloud builds submit . \
-  --config=deploy/cloud-run/cloudbuild.yaml \
-  --substitutions=_GITHUB_REPO_URL=git@github.com:YOUR_USER/YOUR_REPO.git
+```
+========================================
+ ✅ デプロイ完了!
+
+ Service URL: https://obsidian-sync-server-xxx.run.app
+ API Docs:    https://obsidian-sync-server-xxx.run.app/docs
+========================================
 ```
 
-> `_GITHUB_REPO_URL` は SSH 形式で指定してください（例: `git@github.com:ca5/obsidian.git`）
-
-### ステップ 3: 動作確認
+### 動作確認
 
 ```bash
-# サービス URL を取得
-URL=$(gcloud run services describe obsidian-sync-server \
-  --region=asia-northeast1 --format='value(status.url)')
+URL=https://obsidian-sync-server-xxx.run.app  # 上記 URL に置き換え
 
 # ヘルスチェック
-curl -H "X-API-Key: YOUR_API_KEY" ${URL}/api/settings
+curl -H "X-API-Key: YOUR_API_KEY" $URL/api/sync/status
 
-# vault 初期化ステータス
-curl -H "X-API-Key: YOUR_API_KEY" ${URL}/api/sync/status
+# Git ステータス確認（vault が clone されているか）
+curl -H "X-API-Key: YOUR_API_KEY" $URL/api/git/status
 ```
 
 ---
 
-## 環境変数一覧
+## deploy.sh が行っていること
+
+```
+Step 1/4  Artifact Registry の認証設定（リポジトリがなければ自動作成）
+Step 2/4  docker build --platform linux/amd64 でイメージをビルド
+Step 3/4  Artifact Registry へ push
+Step 4/4  Cloud Run へデプロイ（Secret は Secret Manager から自動注入）
+```
+
+---
+
+## 環境変数・シークレット一覧
 
 | 変数名 | 設定方法 | 説明 |
 |---|---|---|
-| `API_KEY` | Secret Manager | API 認証キー |
-| `GIT_SSH_KEY` | Secret Manager | SSH 秘密鍵の内容（PEM形式） |
-| `GITHUB_REPO_URL` | Cloud Run env var | vault の GitHub リポジトリ（SSH形式） |
-| `VAULT_DIR` | Cloud Run env var | vault のパス（デフォルト: `/vault`） |
-| `OB_CMD` | Cloud Run env var | ob コマンドのパス |
-| `CONFIG_FILE` | Cloud Run env var | 設定ファイルのパス |
-| `GIT_USER_NAME` | Cloud Run env var | git コミット時のユーザー名（省略時: "Obsidian Sync Bot"） |
-| `GIT_USER_EMAIL` | Cloud Run env var | git コミット時のメールアドレス |
+| `API_KEY` | **Secret Manager** | API 認証キー |
+| `GIT_SSH_KEY` | **Secret Manager** | SSH 秘密鍵の内容（PEM 形式） |
+| `GITHUB_REPO_URL` | deploy.sh の引数 | vault の GitHub リポジトリ (SSH 形式) |
+| `VAULT_DIR` | deploy.sh 内に設定 | vault のパス（デフォルト: `/vault`） |
+| `OB_CMD` | deploy.sh 内に設定 | ob コマンドのパス |
+| `GIT_USER_NAME` | 必要に応じて追加 | git コミット時のユーザー名 |
+| `GIT_USER_EMAIL` | 必要に応じて追加 | git コミット時のメールアドレス |
+
+### deploy.sh の設定項目（変更する場合）
+
+```bash
+# deploy/cloud-run/deploy.sh の先頭部分
+PROJECT_ID="your-gcp-project"     # GCP プロジェクト ID
+REGION="asia-northeast1"           # リージョン（東京）
+SERVICE_NAME="obsidian-sync-server"
+REPO="obsidian-sync"               # Artifact Registry リポジトリ名
+```
 
 ---
 
-## 初回起動の自動セットアップシーケンス
+## 起動時の自動セットアップシーケンス
 
 コンテナ起動時に以下が自動実行されます：
 
 ```
-1. GIT_SSH_KEY 環境変数から SSH 鍵ファイルを /tmp/deploy_key に書き出す
+1. GIT_SSH_KEY 環境変数から SSH 鍵ファイルを /tmp/ に書き出す
 2. GITHUB_REPO_URL が設定されている場合:
    a. vault/.git が存在しない → git clone GITHUB_REPO_URL VAULT_DIR
    b. vault/.git が存在する   → git pull（最新を取得）
@@ -134,54 +148,40 @@ curl -H "X-API-Key: YOUR_API_KEY" ${URL}/api/sync/status
 
 ---
 
-## 手動デプロイ（Cloud Build を使わない場合）
+## CI/CD が必要な場合（上級者向け）
+
+コードを頻繁に変更する場合は Cloud Build を組み合わせた自動デプロイも使えます：
 
 ```bash
-PROJECT_ID=$(gcloud config get-value project)
-REGION=asia-northeast1
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/obsidian-sync/obsidian-sync-server:latest"
-
-# ビルド
-docker build -t "$IMAGE" .
-
-# プッシュ
-docker push "$IMAGE"
-
-# デプロイ
-gcloud run deploy obsidian-sync-server \
-  --image="$IMAGE" \
-  --region="$REGION" \
-  --platform=managed \
-  --allow-unauthenticated \
-  --min-instances=1 \
-  --max-instances=1 \
-  --memory=512Mi \
-  --cpu=1 \
-  --port=8080 \
-  --set-env-vars="VAULT_DIR=/vault,OB_CMD=/app/node_modules/.bin/ob" \
-  --set-env-vars="GITHUB_REPO_URL=git@github.com:YOUR_USER/YOUR_REPO.git" \
-  --update-secrets="API_KEY=obsidian-sync-api-key:latest" \
-  --update-secrets="GIT_SSH_KEY=obsidian-sync-git-ssh-key:latest"
+gcloud builds submit . \
+  --config=deploy/cloud-run/cloudbuild.yaml \
+  --substitutions=_GITHUB_REPO_URL=git@github.com:YOUR_USER/YOUR_REPO.git
 ```
 
 ---
 
 ## トラブルシューティング
 
-### vault のクローンに失敗する
+### vault の clone に失敗する
 
 Cloud Run のログを確認：
 
 ```bash
-gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=obsidian-sync-server" \
+gcloud logging read \
+  "resource.type=cloud_run_revision AND resource.labels.service_name=obsidian-sync-server" \
   --limit=50 --format="value(textPayload)"
 ```
 
 よくある原因：
-- SSH 鍵の権限が GitHub Deploy Keys に設定されていない
-- `GITHUB_REPO_URL` が HTTPS 形式になっている（SSH 形式 `git@github.com:...` で指定すること）
+- SSH 鍵が GitHub Deploy Keys に登録されていない（Read/Write 権限を要確認）
+- `GITHUB_REPO_URL` が HTTPS 形式になっている → SSH 形式 `git@github.com:...` で指定
 
-### config.json が起動ごとにリセットされる
+### config.json が再起動のたびにリセットされる
 
 Cloud Run はステートレスのため、コンテナ再起動で `/app/server/data/config.json` が消えます。  
-設定の永続化には Cloud Storage Volume Mount または Cloud SQL の利用を検討してください（v0.0.3 以降の課題）。
+設定の永続化には Cloud Storage Volume Mount の利用を検討してください（将来の課題）。
+
+### M1/M2 Mac でビルドしたイメージが動かない
+
+deploy.sh では `--platform linux/amd64` を指定しているため、arm64 の問題は発生しないはずです。  
+ビルドが遅い場合は `docker buildx` の設定を確認してください。
