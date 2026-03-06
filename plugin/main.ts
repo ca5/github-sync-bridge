@@ -236,7 +236,7 @@ class SyncSettingTab extends PluginSettingTab {
     }
 
     private async apiGet<T>(path: string): Promise<T> {
-        const res = await requestUrl({ url: this.url(path), method: 'GET', headers: this.headers });
+        const res = await requestUrl({ url: this.url(path), method: 'GET', headers: this.headers, throw: false });
         if (res.status === 503) {
             const body = res.json ?? {};
             if (body.status === 'initializing') {
@@ -247,7 +247,7 @@ class SyncSettingTab extends PluginSettingTab {
                 throw err;
             }
         }
-        if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
+        if (res.status !== 200) throw new Error(res.json?.detail ?? `HTTP ${res.status}`);
         return res.json as T;
     }
 
@@ -257,6 +257,7 @@ class SyncSettingTab extends PluginSettingTab {
             method: 'POST',
             headers: { ...this.headers, 'Content-Type': 'application/json' },
             body: body ? JSON.stringify(body) : undefined,
+            throw: false,
         });
         if (res.status !== 200) {
             const detail = res.json?.detail ?? `HTTP ${res.status}`;
@@ -334,9 +335,9 @@ class SyncSettingTab extends PluginSettingTab {
     async checkoutBranch(branch: string) {
         try {
             new Notice(`🔀 ${branch} に切り替え中...`);
-            await this.apiPost('/api/git/checkout', { branch });
+            await this.apiPost('/api/git/checkout', { branch, force: true });
             new Notice(`✅ ${branch} に切り替えました`);
-        } catch (e) {
+        } catch (e: any) {
             new Notice(`❌ 切り替え失敗: ${e.message}`);
         }
         await this.refreshStatus();

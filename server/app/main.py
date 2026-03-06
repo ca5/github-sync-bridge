@@ -283,6 +283,7 @@ class CommitRequest(BaseModel):
 
 class CheckoutRequest(BaseModel):
     branch: str
+    force: bool = False  # True の場合、未コミット変更を stash してから切り替え
 
 @app.get("/api/git/status")
 def git_status(x_api_key: Optional[str] = Header(None)):
@@ -323,29 +324,44 @@ def git_branches(x_api_key: Optional[str] = Header(None)):
 
 @app.post("/api/git/checkout")
 def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
-    """ブランチを切り替える。追跡済みファイルに未コミット変更があればエラー。切り替え後に git pull を実行。"""
+    """ブランチを切り替える。force=True なら未コミット変更を stash 後に切り替え。切り替え後に git pull を実行。"""
     verify_api_key(x_api_key)
     try:
         # 未コミット変更チェック（未追跡ファイル「??」は git checkout をブロックしないため除外）
         status_lines = _git(["status", "--short"]).stdout.strip().splitlines()
         tracked_changes = [line for line in status_lines if line and not line.startswith("??")]
+
+        stashed = False
         if tracked_changes:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "未コミットの変更があるためブランチを切り替えられません。"
-                    "先にコミットしてください。\n"
-                    + "\n".join(tracked_changes)
+            if not req.force:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "未コミットの変更があるためブランチを切り替えられません。"
+                        "先にコミットするか、force=true で切り替えてください。\n"
+                        + "\n".join(tracked_changes)
+                    )
                 )
-            )
+            # force=True: stash して変更を退避
+            _git(["stash", "push", "-m", f"auto-stash before checkout {req.branch}"])
+            stashed = True
+
         # ブランチ切り替え（リモートにしかない場合は自動でトラッキング）
         _git(["checkout", "-B", req.branch, f"origin/{req.branch}"])
         # git pull
         pull_result = _git(["pull", "origin", req.branch])
+
+        stash_note = ""
+        if stashed:
+            try:
+                _git(["stash", "pop"])
+            except subprocess.CalledProcessError:
+                stash_note = " (未コミット変更を stash しました。'git stash pop' で復元できます)"
+
         return {
             "status": "success",
             "branch": req.branch,
-            "pull_output": pull_result.stdout.strip(),
+            "pull_output": pull_result.stdout.strip() + stash_note,
         }
     except HTTPException:
         raise
