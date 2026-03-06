@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import json
@@ -9,6 +10,31 @@ import time
 from datetime import datetime, timezone
 
 app = FastAPI(title="Obsidian Sync Server API")
+
+# 起動完了フラグ — False の間は初期化中なので 503 を返す
+_startup_complete: bool = False
+_startup_phase: str = "初期化中..."
+
+@app.middleware("http")
+async def startup_guard(request: Request, call_next):
+    """
+    起動完了前は /api/health 以外すべてのエンドポイントに 503 を返す。
+    Cloud Run で min-instances=0 の場合、コールドスタート時に git clone 等が
+    完了するまでプラグインを待機させるため。
+    """
+    if not _startup_complete:
+        allow_paths = {"/api/health", "/docs", "/openapi.json", "/redoc"}
+        if request.url.path not in allow_paths:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "initializing",
+                    "phase": _startup_phase,
+                    "message": f"サーバー起動中: {_startup_phase}",
+                    "startup_log": _startup_log[-10:],
+                }
+            )
+    return await call_next(request)
 
 # 同期ステータスをメモリで管理
 _sync_status = {
@@ -67,6 +93,15 @@ def save_settings(settings: Settings):
 def verify_api_key(api_key: str):
     if api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
+
+@app.get("/api/health")
+def health_check():
+    """認証不要・常に応答するヘルスチェック。プラグインが起動完了を確認するのに使う。"""
+    return {
+        "status": "ready" if _startup_complete else "initializing",
+        "phase": _startup_phase,
+        "startup_log": _startup_log[-10:],
+    }
 
 @app.get("/api/settings", response_model=Settings)
 def get_settings(x_api_key: Optional[str] = Header(None)):
@@ -408,16 +443,22 @@ def sync_worker():
 
 @app.on_event("startup")
 def startup_event():
-    # SSH 鍵のセットアップ（GIT_SSH_KEY 環境変数からファイルを作成）
+    global _startup_complete, _startup_phase
+
+    _startup_phase = "SSH 鍵の設定中"
+    _log("▶ 起動フェーズ 1/5: SSH 鍵の設定")
     setup_ssh_key()
 
-    # Obsidian 認証トークンの復元（OBSIDIAN_AUTH_TOKEN 環境変数から）
+    _startup_phase = "Obsidian 認証トークンの設定中"
+    _log("▶ 起動フェーズ 2/5: Obsidian 認証トークンの設定")
     setup_obsidian_auth()
 
-    # GitHub から vault を初期化（GITHUB_REPO_URL が設定されている場合）
+    _startup_phase = "Vault を GitHub から取得中"
+    _log("▶ 起動フェーズ 3/5: vault の変更定込または clone")
     init_vault_from_github()
 
-    # Obsidian Sync の vault セットアップ（OBSIDIAN_VAULT_ID が設定されている場合）
+    _startup_phase = "Obsidian Sync のセットアップ中"
+    _log("▶ 起動フェーズ 4/5: ob sync-setup")
     setup_obsidian_vault()
 
     # 初回起動時に設定ファイルがなければ作成
@@ -427,9 +468,13 @@ def startup_event():
     # 前回の異常終了 (--reload 等) で残ったロックを削除
     clear_sync_lock()
 
-    # バックグラウンドワーカー起動
+    _startup_phase = "完了"
+    _log("▶ 起動フェーズ 5/5: バックグラウンドワーカー起動")
     thread = threading.Thread(target=sync_worker, daemon=True)
     thread.start()
+
+    _startup_complete = True
+    _log("✅ サーバー起動完了")
 
 
 def setup_ssh_key() -> None:

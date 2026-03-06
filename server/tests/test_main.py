@@ -12,14 +12,19 @@ from app.main import app
 
 client = TestClient(app)
 
+import app.main as main_module
+
 @pytest.fixture(autouse=True)
 def setup_and_teardown():
+    # テスト中は起動完了扱いにする（ミドルウェアの 503 をバイパス）
+    main_module._startup_complete = True
     # 各テストの前にファイルを削除しておく
     if os.path.exists(TEST_CONFIG_FILE):
         os.remove(TEST_CONFIG_FILE)
     yield
     if os.path.exists(TEST_CONFIG_FILE):
         os.remove(TEST_CONFIG_FILE)
+    main_module._startup_complete = False
 
 # =========================================================
 # 既存: Settings API

@@ -74,6 +74,12 @@ class SyncSettingTab extends PluginSettingTab {
     gitStatus: GitStatus | null = null;
     gitBranches: GitBranches | null = null;
 
+    // コールドスタート待機状態
+    private isInitializing = false;
+    private initPhase = '';
+    private initLog: string[] = [];
+    private retryTimer: number | null = null;
+
     // コミットメッセージ入力用
     private commitMessage = '';
 
@@ -94,6 +100,16 @@ class SyncSettingTab extends PluginSettingTab {
 
     private async apiGet<T>(path: string): Promise<T> {
         const res = await requestUrl({ url: this.url(path), method: 'GET', headers: this.headers });
+        if (res.status === 503) {
+            const body = res.json ?? {};
+            if (body.status === 'initializing') {
+                const err: any = new Error('initializing');
+                err.isInitializing = true;
+                err.phase = body.phase ?? '';
+                err.log = body.startup_log ?? [];
+                throw err;
+            }
+        }
         if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
         return res.json as T;
     }
@@ -114,6 +130,21 @@ class SyncSettingTab extends PluginSettingTab {
 
     // ─── データ取得 ───────────────────────────────────────
 
+    private stopRetry() {
+        if (this.retryTimer !== null) {
+            window.clearTimeout(this.retryTimer);
+            this.retryTimer = null;
+        }
+    }
+
+    private scheduleRetry() {
+        this.stopRetry();
+        this.retryTimer = window.setTimeout(() => {
+            this.retryTimer = null;
+            this.fetchAll();
+        }, 3000);
+    }
+
     async fetchAll() {
         try {
             [this.remoteSettings, this.syncStatus, this.gitStatus, this.gitBranches] =
@@ -123,9 +154,19 @@ class SyncSettingTab extends PluginSettingTab {
                     this.apiGet<GitStatus>('/api/git/status'),
                     this.apiGet<GitBranches>('/api/git/branches'),
                 ]);
+            // 接続成功 → 初期化待ち状態を解除
+            this.stopRetry();
+            this.isInitializing = false;
             new Notice('✅ サーバーに接続しました');
-        } catch (e) {
-            new Notice(`❌ 接続失敗: ${e.message}`);
+        } catch (e: any) {
+            if (e.isInitializing) {
+                this.isInitializing = true;
+                this.initPhase = e.phase;
+                this.initLog = e.log;
+                this.scheduleRetry();
+            } else {
+                new Notice(`❌ 接続失敗: ${e.message}`);
+            }
         }
         this.display();
     }
@@ -137,8 +178,16 @@ class SyncSettingTab extends PluginSettingTab {
                 this.apiGet<GitStatus>('/api/git/status'),
                 this.apiGet<GitBranches>('/api/git/branches'),
             ]);
-        } catch (e) {
-            new Notice(`ステータス更新失敗: ${e.message}`);
+            this.isInitializing = false;
+        } catch (e: any) {
+            if (e.isInitializing) {
+                this.isInitializing = true;
+                this.initPhase = e.phase;
+                this.initLog = e.log;
+                this.scheduleRetry();
+            } else {
+                new Notice(`ステータス更新失敗: ${e.message}`);
+            }
         }
         this.display();
     }
@@ -253,6 +302,28 @@ class SyncSettingTab extends PluginSettingTab {
                 .setButtonText('Connect & Load')
                 .setCta()
                 .onClick(() => this.fetchAll()));
+
+        // ─── コールドスタート待機中 ────────────────────────────
+        if (this.isInitializing) {
+            const box = containerEl.createEl('div', { cls: 'sync-initializing-box' });
+            box.createEl('p', { text: '⏳ サーバー起動中...' });
+            box.createEl('p', { text: `フェーズ: ${this.initPhase}`, cls: 'sync-status-message' });
+            box.createEl('p', { text: '3 秒後に自動で再接続します', cls: 'sync-status-message' });
+            if (this.initLog.length > 0) {
+                const details = box.createEl('details');
+                details.createEl('summary', { text: `🪵 起動ログ (${this.initLog.length} 件)` });
+                details.createEl('pre', { cls: 'sync-startup-log', text: this.initLog.join('\n') });
+            }
+            new Setting(containerEl)
+                .addButton(btn => btn
+                    .setButtonText('キャンセル')
+                    .onClick(() => {
+                        this.stopRetry();
+                        this.isInitializing = false;
+                        this.display();
+                    }));
+            return;
+        }
 
         if (!this.remoteSettings) return;
 
