@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, requestUrl } from 'obsidian';
+import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, SuggestModal, requestUrl } from 'obsidian';
 
 // ─── 型定義 ──────────────────────────────────────────────
 
@@ -46,10 +46,73 @@ const DEFAULT_SETTINGS: SyncPluginSettings = {
 
 export default class SyncBridgePlugin extends Plugin {
     settings: SyncPluginSettings;
+    /** 設定タブへの参照（コマンドから状態を同期するため） */
+    settingTab: SyncSettingTab | null = null;
 
     async onload() {
         await this.loadSettings();
-        this.addSettingTab(new SyncSettingTab(this.app, this));
+        const tab = new SyncSettingTab(this.app, this);
+        this.settingTab = tab;
+        this.addSettingTab(tab);
+
+        // ─── コマンドパレット ─────────────────────────────
+
+        this.addCommand({
+            id: 'connect-server',
+            name: 'サーバーに接続 / ステータス取得',
+            callback: () => this.settingTab?.fetchAll(),
+        });
+
+        this.addCommand({
+            id: 'refresh-status',
+            name: 'ステータス更新',
+            callback: () => this.settingTab?.refreshStatus(),
+        });
+
+        this.addCommand({
+            id: 'force-sync',
+            name: 'Obsidian Sync: 強制同期',
+            callback: () => this.settingTab?.forceSync(),
+        });
+
+        this.addCommand({
+            id: 'git-push',
+            name: 'Git: Push',
+            callback: () => this.settingTab?.pushChanges(),
+        });
+
+        this.addCommand({
+            id: 'git-pull',
+            name: 'Git: Pull',
+            callback: () => this.settingTab?.pullChanges(),
+        });
+
+        this.addCommand({
+            id: 'git-commit',
+            name: 'Git: コミット',
+            callback: () => {
+                new CommitMessageModal(this.app, async (message) => {
+                    if (!this.settingTab) return;
+                    this.settingTab.commitMessage = message;
+                    await this.settingTab.commitChanges();
+                }).open();
+            },
+        });
+
+        this.addCommand({
+            id: 'git-checkout',
+            name: 'Git: ブランチ切り替え',
+            callback: async () => {
+                const tab = this.settingTab;
+                if (!tab?.gitBranches) {
+                    new Notice('先にサーバーに接続してください');
+                    return;
+                }
+                new BranchSuggestModal(this.app, tab.gitBranches.branches, async (branch) => {
+                    await tab.checkoutBranch(branch);
+                }).open();
+            },
+        });
     }
 
     onunload() {}
@@ -60,6 +123,80 @@ export default class SyncBridgePlugin extends Plugin {
 
     async saveSettings() {
         await this.saveData(this.settings);
+    }
+}
+
+// ─── コマンド用モーダル ──────────────────────────────────
+
+/** コミットメッセージ入力モーダル */
+class CommitMessageModal extends Modal {
+    private onSubmit: (message: string) => void;
+    private input = '';
+
+    constructor(app: App, onSubmit: (message: string) => void) {
+        super(app);
+        this.onSubmit = onSubmit;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.createEl('h3', { text: 'Git コミット' });
+
+        new Setting(contentEl)
+            .setName('コミットメッセージ')
+            .addText(text => text
+                .setPlaceholder('コミットメッセージを入力...')
+                .onChange(v => { this.input = v; })
+                .inputEl.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') this.submit();
+                }));
+
+        new Setting(contentEl)
+            .addButton(btn => btn
+                .setButtonText('📝 コミット')
+                .setCta()
+                .onClick(() => this.submit()))
+            .addButton(btn => btn
+                .setButtonText('キャンセル')
+                .onClick(() => this.close()));
+    }
+
+    private submit() {
+        if (!this.input.trim()) {
+            new Notice('コミットメッセージを入力してください');
+            return;
+        }
+        this.close();
+        this.onSubmit(this.input.trim());
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+/** ブランチ選択モーダル（コマンドパレット風） */
+class BranchSuggestModal extends SuggestModal<string> {
+    private branches: string[];
+    private onChoose: (branch: string) => void;
+
+    constructor(app: App, branches: string[], onChoose: (branch: string) => void) {
+        super(app);
+        this.branches = branches;
+        this.onChoose = onChoose;
+        this.setPlaceholder('ブランチを選択...');
+    }
+
+    getSuggestions(query: string): string[] {
+        return this.branches.filter(b => b.toLowerCase().includes(query.toLowerCase()));
+    }
+
+    renderSuggestion(branch: string, el: HTMLElement) {
+        el.createEl('div', { text: `🌿 ${branch}` });
+    }
+
+    onChooseSuggestion(branch: string) {
+        this.onChoose(branch);
     }
 }
 
@@ -81,7 +218,7 @@ class SyncSettingTab extends PluginSettingTab {
     private retryTimer: number | null = null;
 
     // コミットメッセージ入力用
-    private commitMessage = '';
+    commitMessage = '';
 
     constructor(app: App, plugin: SyncBridgePlugin) {
         super(app, plugin);
