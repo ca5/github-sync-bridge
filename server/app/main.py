@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 import json
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -148,17 +149,39 @@ def check_vault_safety() -> tuple[bool, str]:
         )
     return True, ""
 
-def clear_sync_lock():
-    """sync.lockディレクトリを削除する。
-    Obsidianが異常終了した際や、ローカルObsidianを閉じた後にロックが残る場合に使う。
+def clear_sync_lock() -> None:
     """
+    ob sync のステールロックをすべて削除する。
+
+    削除対象:
+      1. vault/.obsidian/.sync.lock  (obsidian-headless が使う vault 内ロック)
+      2. ~/.obsidian-headless/sync/ 配下の *.lock ファイル
+
+    注意: os.rmdir() は空でないディレクトリを削除できないため
+          shutil.rmtree() を使用する。
+    """
+    # 1. vault 内の .sync.lock
     sync_lock = os.path.join(VAULT_DIR, ".obsidian", ".sync.lock")
     if os.path.isdir(sync_lock):
         try:
-            os.rmdir(sync_lock)
-            print(f"Removed stale sync lock: {sync_lock}")
+            shutil.rmtree(sync_lock)
+            _log(f"Removed stale vault sync lock: {sync_lock}")
         except OSError as e:
-            print(f"Warning: Could not remove sync lock: {e}")
+            _log(f"Warning: Could not remove vault sync lock: {e}")
+
+    # 2. ~/.obsidian-headless/sync/ 配下の *.lock
+    obs_sync_dir = os.path.expanduser("~/.obsidian-headless/sync")
+    if os.path.isdir(obs_sync_dir):
+        import glob
+        for lock_path in glob.glob(os.path.join(obs_sync_dir, "**", "*.lock"), recursive=True):
+            try:
+                if os.path.isdir(lock_path):
+                    shutil.rmtree(lock_path)
+                else:
+                    os.remove(lock_path)
+                _log(f"Removed stale obsidian-headless lock: {lock_path}")
+            except OSError as e:
+                _log(f"Warning: Could not remove lock {lock_path}: {e}")
 
 # ob sync の同時実行を防ぐロック（force_sync ↔ sync_worker の競合防止）
 _ob_sync_lock = threading.Lock()
@@ -422,13 +445,24 @@ def sync_worker():
                     "last_sync_message": "",
                 })
             except subprocess.CalledProcessError as e:
-                msg = _trim_error(e.stderr)
-                print(f"Background sync failed: {msg}")
-                _sync_status.update({
-                    "last_sync_at": datetime.now(timezone.utc).isoformat(),
-                    "last_sync_result": "failed",
-                    "last_sync_message": msg,
-                })
+                stderr = e.stderr or ""
+                # "Another sync instance" は一時的な状態なのでロック削除してスキップ扱いにする
+                if "another sync instance" in stderr.lower() or "already running" in stderr.lower():
+                    print("Background sync: another instance detected, clearing lock and retrying next interval.")
+                    clear_sync_lock()
+                    _sync_status.update({
+                        "last_sync_at": datetime.now(timezone.utc).isoformat(),
+                        "last_sync_result": "skipped",
+                        "last_sync_message": "別の同期プロセスが実行中だったため、ロックを解除しました。次回のインターバルで再同期します。",
+                    })
+                else:
+                    msg = _trim_error(stderr)
+                    print(f"Background sync failed: {msg}")
+                    _sync_status.update({
+                        "last_sync_at": datetime.now(timezone.utc).isoformat(),
+                        "last_sync_result": "failed",
+                        "last_sync_message": msg,
+                    })
             except FileNotFoundError:
                 msg = "obsidian-headless (ob) is not installed or not in PATH."
                 print(msg)
@@ -460,6 +494,9 @@ def startup_event():
     _startup_phase = "Obsidian Sync のセットアップ中"
     _log("▶ 起動フェーズ 4/5: ob sync-setup")
     setup_obsidian_vault()
+
+    # ob sync-setup が内部でロックを作る場合があるため、再度クリアする
+    clear_sync_lock()
 
     # 初回起動時に設定ファイルがなければ作成
     if not os.path.exists(CONFIG_FILE):
