@@ -12,16 +12,16 @@ from datetime import datetime, timezone
 
 app = FastAPI(title="Obsidian Sync Server API")
 
-# 起動完了フラグ — False の間は初期化中なので 503 を返す
+# Startup completion flag - Returns 503 while False (initializing)
 _startup_complete: bool = False
 _startup_phase: str = "Initializing..."
 
 @app.middleware("http")
 async def startup_guard(request: Request, call_next):
     """
-    起動完了前は /api/health 以外すべてのエンドポイントに 503 を返す。
-    Cloud Run で min-instances=0 の場合、コールドスタート時に git clone 等が
-    完了するまでプラグインを待機させるため。
+    Returns 503 for all endpoints except /api/health before startup is complete.
+    This allows the plugin to wait for git clone etc. to finish during cold start
+    when Cloud Run has min-instances=0.
     """
     if not _startup_complete:
         allow_paths = {"/api/health", "/docs", "/openapi.json", "/redoc"}
@@ -37,19 +37,19 @@ async def startup_guard(request: Request, call_next):
             )
     return await call_next(request)
 
-# 同期ステータスをメモリで管理
+# Manage sync status in memory
 _sync_status = {
-    "last_sync_at": None,       # 最終sync実行時刻 (ISO8601)
+    "last_sync_at": None,       # Last sync time (ISO8601)
     "last_sync_result": None,   # "success" | "failed" | "skipped"
-    "last_sync_message": "",    # エラーメッセージなど
-    "is_vault_ready": False,    # Vaultが同期可能な状態か
+    "last_sync_message": "",    # Error message etc.
+    "is_vault_ready": False,    # Whether the vault is ready to sync
 }
 
-# 起動時のログ（最新 50 件）— プラグイン側から /api/sync/status で参照可能
+# Startup logs (last 50) - accessible from /api/sync/status
 _startup_log: list[str] = []
 
 def _log(msg: str) -> None:
-    """startup中のメッセージを標準出力とメモリ両方に記録する"""
+    """Record startup messages to both stdout and memory"""
     ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line)
@@ -59,13 +59,13 @@ def _log(msg: str) -> None:
 
 CONFIG_FILE = os.getenv("CONFIG_FILE", "./data/config.json")
 API_KEY = os.getenv("API_KEY", "default-secret-key")
-# ob sync-setup を実行したVaultのディレクトリ
-# デフォルト: プロジェクトルート/vault（--path ./vault で setup 済み）
+# Vault directory where ob sync-setup was executed
+# Default: project_root/vault (already setup with --path ./vault)
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 VAULT_DIR = os.getenv("VAULT_DIR", os.path.join(_PROJECT_ROOT, "vault"))
-# ob コマンドの絶対パス（PATH に依存しないよう直接解決）
+# Absolute path to the 'ob' command (resolved directly to avoid PATH dependency)
 OB_CMD = os.getenv("OB_CMD", os.path.join(_PROJECT_ROOT, "node_modules/.bin/ob"))
-# SSH 秘密鍵のパス（setup_ssh_key() で更新される場合がある）
+# Path to the SSH private key (may be updated by setup_ssh_key())
 _GIT_SSH_KEY = os.getenv("GIT_SSH_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa"))
 
 class Settings(BaseModel):
@@ -76,7 +76,7 @@ def load_settings() -> Settings:
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r") as f:
             data = json.load(f)
-            # 古い設定ファイルから sync_obsidian_config を除外してロード
+            # Load settings, excluding old 'sync_obsidian_config'
             if "sync_obsidian_config" in data:
                 del data["sync_obsidian_config"]
             return Settings(**data)
@@ -98,7 +98,7 @@ def verify_api_key(api_key: str):
 
 @app.get("/api/health")
 def health_check():
-    """認証不要・常に応答するヘルスチェック。プラグインが起動完了を確認するのに使う。"""
+    """Health check endpoint. Used by plugin to confirm server is ready."""
     return {
         "status": "ready" if _startup_complete else "initializing",
         "phase": _startup_phase,
@@ -133,8 +133,8 @@ def update_settings(settings: Settings, x_api_key: Optional[str] = Header(None))
     return settings
 
 def check_vault_safety() -> tuple[bool, str]:
-    """Vaultが空でないことを確認する安全チェック。
-    空のVaultでob syncを実行するとリモートのノートが全削除される危険がある。
+    """Check if vault is not empty.
+    Syncing an empty vault could delete all remote notes.
     """
     if not os.path.isdir(VAULT_DIR):
         return False, f"Vault directory does not exist: {VAULT_DIR}"
@@ -152,14 +152,10 @@ def check_vault_safety() -> tuple[bool, str]:
 
 def clear_sync_lock() -> None:
     """
-    ob sync のステールロックをすべて削除する。
-
-    削除対象:
-      1. vault/.obsidian/.sync.lock  (obsidian-headless が使う vault 内ロック)
-      2. ~/.obsidian-headless/sync/ 配下の *.lock ファイル
-
-    注意: os.rmdir() は空でないディレクトリを削除できないため
-          shutil.rmtree() を使用する。
+    Remove all stale ob sync locks.
+    Targets:
+      1. vault/.obsidian/.sync.lock
+      2. ~/.obsidian-headless/sync/ *.lock
     """
     # 1. vault 内の .sync.lock
     sync_lock = os.path.join(VAULT_DIR, ".obsidian", ".sync.lock")
@@ -193,7 +189,7 @@ def force_sync(x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
     settings = load_settings()
 
-    # 安全チェック: Vaultが空の場合はsyncを拒否
+    # 安全チェック: Vaultが空Forはsyncを拒否
     safe, reason = check_vault_safety()
     if not safe:
         raise HTTPException(status_code=500, detail=f"Sync aborted: {reason}")
@@ -201,8 +197,8 @@ def force_sync(x_api_key: Optional[str] = Header(None)):
     # 同期実行ロジック (obsidian-headless版)
     print(f"Executing force sync...")
 
-    # 同期の実行
-    sync_command = [OB_CMD, "sync"]
+    # Executing sync
+    sync_command = [OB_CMD, "sync", "--path", VAULT_DIR]
 
     try:
         with _ob_sync_lock:
@@ -227,9 +223,9 @@ def _git_env() -> dict:
 
 def _trim_error(stderr: str, max_len: int = 200) -> str:
     """
-    ob sync / git のエラーメッセージを読みやすく切り詰める。
-    Node.js のミニファイコード / ファイルパスが stderr に入り込む場合に対応。
-    優先度: Error: を含む行 > ファイルパス以外の行 > 最初の行
+    ob sync / git Trim error messages for readability.
+    Node.js Minified code / Handle file paths in stderr.
+    優先度: Error: を含む行 > ファイルパス以外の行 > First line
     """
     import re
     if not stderr:
@@ -243,7 +239,7 @@ def _trim_error(stderr: str, max_len: int = 200) -> str:
         return bool(re.search(r'\.(js|ts):\d+', line))
 
     def _is_minified(line: str) -> bool:
-        # 80 文字以上かつセミコロンが多い行 = ミニファイコード
+        # 80 Long line with many semicolons = ミニファイコード
         return len(line) > 80 and line.count(';') > 5
 
     # Error: を含む行を優先
@@ -251,7 +247,7 @@ def _trim_error(stderr: str, max_len: int = 200) -> str:
     if error_lines:
         best = error_lines[0]
     else:
-        # JSファイルパスとミニファイ行を除いた最初の行
+        # JSファイルパスとミニファイ行を除いたFirst line
         readable = [l for l in lines if not _is_js_path(l) and not _is_minified(l)]
         best = readable[0] if readable else lines[0]
 
@@ -277,16 +273,16 @@ class CommitRequest(BaseModel):
 
 class CheckoutRequest(BaseModel):
     branch: str
-    # 未コミット変更がある場合の処理方法
-    # - "stash"       : stash して新ブランチに引き継ぐ
-    # - "commit_push" : コミットして push してから切り替える
-    # - "discard"     : 変更を捨ててから切り替える
+    # How to handle uncommitted changes
+    # - "stash"       : stash and carry over to new branch
+    # - "commit_push" : Commit and push before switching
+    # - "discard"     : Discard changes before switching
     mode: str = "stash"        # デフォルト: stash
-    commit_message: str = ""   # mode=commit_push の場合に使うコミットメッセージ
+    commit_message: str = ""   # mode=commit_push Commit message to use for
 
 @app.get("/api/git/status")
 def git_status(x_api_key: Optional[str] = Header(None)):
-    """現在のブランチ・変更ファイル一覧を返す"""
+    """Return current branch and changed files"""
     verify_api_key(x_api_key)
     try:
         branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
@@ -304,7 +300,7 @@ def git_status(x_api_key: Optional[str] = Header(None)):
 
 @app.get("/api/git/branches")
 def git_branches(x_api_key: Optional[str] = Header(None)):
-    """ローカル + リモートのブランチ一覧を返す"""
+    """ローカル + Return list of remote branches"""
     verify_api_key(x_api_key)
     try:
         current = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
@@ -325,8 +321,8 @@ def git_branches(x_api_key: Optional[str] = Header(None)):
 def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
     """
     ブランチを切り替える。切り替え後に git pull を実行。
-    mode によって未コミット変更の処理方法を選択できる。
-    未追跡ファイルも checkout をブロックする場合があるため、全変更をチェックする。
+    mode Choose how to handle uncommitted changes.
+    未追跡ファイルも checkout をブロックする場合existsため、全変更をチェックする。
     """
     verify_api_key(x_api_key)
     try:
@@ -339,13 +335,13 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
 
         if all_changes:
             if req.mode == "stash":
-                # --include-untracked: 追跡済み＋未追跡ファイルを両方 stash する
+                # --include-untracked: Stash both tracked and untracked files
                 _git(["stash", "push", "--include-untracked",
                       "-m", f"auto-stash before checkout {req.branch}"])
                 note = "__stash_pop__"
 
             elif req.mode == "commit_push":
-                # git add -A で未追跡ファイルも含めてステージ → commit → push
+                # git add -A Stage including untracked files → commit → push
                 msg = req.commit_message.strip() or f"auto-commit before checkout {req.branch}"
                 _git(["add", "-A"])
                 _git(["commit", "-m", msg])
@@ -354,24 +350,24 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
                 note = f"別ブランチ ({current_branch}) にコミット・ Push しました"
 
             elif req.mode == "discard":
-                # 追跡済み変更を破棄 + 未追跡ファイルを削除
+                # Discard tracked changes + Delete untracked files
                 _git(["checkout", "--", "."])
                 _git(["clean", "-fd"])
-                note = "未コミットの変更を破棄しました"
+                note = "Discarded uncommitted changes"
 
             else:
                 raise HTTPException(status_code=400, detail=f"Unknown mode: {req.mode}")
 
-        # ブランチ切り替え（リモートにしかない場合は自動でトラッキング）
+        # Checkout branch (auto track if remote only)
         _git(["checkout", "-B", req.branch, f"origin/{req.branch}"])
         # git pull
         pull_result = _git(["pull", "origin", req.branch])
 
-        # stash pop（mode=stash の場合）
+        # stash pop（mode=stash For）
         if note == "__stash_pop__":
             try:
                 _git(["stash", "pop"])
-                note = "変更を新ブランチに引き継ぎました"
+                note = "Carried over changes to new branch"
             except subprocess.CalledProcessError:
                 note = "変更を stash しました（'git stash pop' で後で復元できます）"
 
@@ -388,7 +384,7 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
 
 @app.post("/api/git/commit")
 def git_commit(req: CommitRequest, x_api_key: Optional[str] = Header(None)):
-    """すべての変更をステージして指定メッセージでコミットする"""
+    """Stage all changes and commit with message"""
     verify_api_key(x_api_key)
     try:
         _git(["add", "-A"])
@@ -411,7 +407,7 @@ def git_push(x_api_key: Optional[str] = Header(None)):
 
 @app.post("/api/git/pull")
 def git_pull(x_api_key: Optional[str] = Header(None)):
-    """現在のブランチをリモートから pull する"""
+    """Pull current branch from remote"""
     verify_api_key(x_api_key)
     try:
         branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
@@ -421,7 +417,7 @@ def git_pull(x_api_key: Optional[str] = Header(None)):
         raise HTTPException(status_code=500, detail=f"git pull failed: {e.stderr}")
 
 
-# 定期実行ワーカー
+# Periodic sync worker
 def sync_worker():
     while True:
         settings = load_settings()
@@ -429,7 +425,7 @@ def sync_worker():
 
         print(f"Background worker running... Interval: {interval} min")
 
-        # 安全チェック: Vaultが空の場合はsyncをスキップ
+        # 安全チェック: Vaultが空Forはsyncをスキップ
         safe, reason = check_vault_safety()
         if not safe:
             print(f"Background sync skipped: {reason}")
@@ -441,11 +437,11 @@ def sync_worker():
             time.sleep(interval * 60)
             continue
 
-        # 認証チェック: トークン未設定の場合は ob sync をスキップ
+        # Auth check: トークン未設定Forは ob sync をスキップ
         if not _is_ob_auth_configured():
             msg = (
-                "Obsidian 認証未設定: ~/.obsidian-headless/auth_token がありません。"
-                "setup-obsidian-auth.sh を実行して OBSIDIAN_AUTH_TOKEN を登録してください。"
+                "Obsidian Auth not configured: ~/.obsidian-headless/auth_token missing."
+                "Run setup-obsidian-auth.sh to register OBSIDIAN_AUTH_TOKEN."
             )
             print(f"Background sync skipped: {msg}")
             _sync_status.update({
@@ -460,8 +456,8 @@ def sync_worker():
         with _ob_sync_lock:
             clear_sync_lock()
 
-            # 同期の実行
-            sync_command = [OB_CMD, "sync"]
+            # Executing sync
+            sync_command = [OB_CMD, "sync", "--path", VAULT_DIR]
 
             try:
                 subprocess.run(sync_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
@@ -473,14 +469,14 @@ def sync_worker():
                 })
             except subprocess.CalledProcessError as e:
                 stderr = e.stderr or ""
-                # "Another sync instance" は一時的な状態なのでロック削除してスキップ扱いにする
+                # "Another sync instance" Transient state - clearing lock and skipping
                 if "another sync instance" in stderr.lower() or "already running" in stderr.lower():
                     print("Background sync: another instance detected, clearing lock and retrying next interval.")
                     clear_sync_lock()
                     _sync_status.update({
                         "last_sync_at": datetime.now(timezone.utc).isoformat(),
                         "last_sync_result": "skipped",
-                        "last_sync_message": "別の同期プロセスが実行中だったため、ロックを解除しました。次回のインターバルで再同期します。",
+                        "last_sync_message": "Skipped because another sync was running. Lock cleared.",
                     })
                 else:
                     msg = _trim_error(stderr)
@@ -499,64 +495,64 @@ def sync_worker():
                     "last_sync_message": msg,
                 })
 
-        # 次のインターバルまで待機
+        # Wait for next interval
         time.sleep(interval * 60)
 
 @app.on_event("startup")
 def startup_event():
     global _startup_complete, _startup_phase
 
-    _startup_phase = "SSH 鍵の設定中"
-    _log("▶ 起動フェーズ 1/5: SSH 鍵の設定")
+    _startup_phase = "Configuring SSH key"
+    _log("▶ Phase 1/5: Setup SSH key")
     setup_ssh_key()
 
-    _startup_phase = "Obsidian 認証トークンの設定中"
-    _log("▶ 起動フェーズ 2/5: Obsidian 認証トークンの設定")
+    _startup_phase = "Configuring Obsidian auth token"
+    _log("▶ Phase 2/5: Setup Obsidian Auth Token")
     setup_obsidian_auth()
 
-    _startup_phase = "Vault を GitHub から取得中"
-    _log("▶ 起動フェーズ 3/5: vault の変更定込または clone")
+    _startup_phase = "Fetching Vault from GitHub"
+    _log("▶ Phase 3/5: Clone or Update Vault from GitHub")
     init_vault_from_github()
 
-    _startup_phase = "Obsidian Sync のセットアップ中"
-    _log("▶ 起動フェーズ 4/5: ob sync-setup")
+    _startup_phase = "Setting up Obsidian Sync"
+    _log("▶ Phase 4/5: ob sync-setup")
     setup_obsidian_vault()
 
-    # ob sync-setup が内部でロックを作る場合があるため、再度クリアする
+    # ob sync-setup Clear lock again as sync-setup might create one
     clear_sync_lock()
 
-    # 初回起動時に設定ファイルがなければ作成
+    # Create settings file if missing on first boot
     if not os.path.exists(CONFIG_FILE):
         save_settings(load_settings())
 
-    # 前回の異常終了 (--reload 等) で残ったロックを削除
+    # Clear locks left by previous abnormal exit
     clear_sync_lock()
 
-    _startup_phase = "完了"
-    _log("▶ 起動フェーズ 5/5: バックグラウンドワーカー起動")
+    _startup_phase = "Complete"
+    _log("▶ Phase 5/5: Launch background worker")
     thread = threading.Thread(target=sync_worker, daemon=True)
     thread.start()
 
     _startup_complete = True
-    _log("✅ サーバー起動完了")
+    _log("✅ Server startup complete")
 
 
 def setup_ssh_key() -> None:
     """
-    GIT_SSH_KEY 環境変数（PEM 形式の秘密鍵文字列）から
+    GIT_SSH_KEY 環境変数（PEM PEM formatted private key string）から
     一時ファイルを作成し、_GIT_SSH_KEY グローバル変数を更新する。
-    Cloud Run では Secret Manager から env var に注入された値を利用する。
+    Cloud Run Use value injected from Secret Manager in Cloud Run.
     """
     global _GIT_SSH_KEY
     git_ssh_key_content = os.getenv("GIT_SSH_KEY", "")
     if not git_ssh_key_content:
-        # 環境変数未設定: GIT_SSH_KEY_PATH のファイルをそのまま使用
+        # Environment variable not set: GIT_SSH_KEY_PATH Use existing file
         _log(f"GIT_SSH_KEY not set. Using key file: {_GIT_SSH_KEY}")
         return
 
     key_path = "/tmp/obsidian_sync_deploy_key"
     with open(key_path, "w") as f:
-        # PEM 形式の改行が スペースに変わっている場合の修復（Cloud Run の env var 起因）
+        # PEM Repair newlines turned into spaces（Cloud Run due to env var issues）
         content = git_ssh_key_content.replace("\\n", "\n")
         if not content.endswith("\n"):
             content += "\n"
@@ -568,17 +564,17 @@ def setup_ssh_key() -> None:
 
 def init_vault_from_github() -> None:
     """
-    起動時に GITHUB_REPO_URL が設定されている場合、
-    vault/ を GitHub リポジトリから自動初期化する。
-    - vault/.git がない → git clone
-    - vault/.git がある → git pull（最新化）
+    起動時に GITHUB_REPO_URL If set,
+    vault/ initialize from GitHub repo.
+    - vault/.git missing → git clone
+    - vault/.git exists → git pull(updating)
     """
     github_repo = os.getenv("GITHUB_REPO_URL", "")
     if not github_repo:
         _log("GITHUB_REPO_URL not set. Skipping vault initialization from GitHub.")
         return
 
-    # git ユーザー設定（環境変数でカスタマイズ可）
+    # git User config (customizable via env var)
     git_name = os.getenv("GIT_USER_NAME", "Obsidian Sync Bot")
     git_email = os.getenv("GIT_USER_EMAIL", "obsidian-sync-bot@server")
     subprocess.run(["git", "config", "--global", "user.name", git_name], check=False)
@@ -587,7 +583,7 @@ def init_vault_from_github() -> None:
     git_dir = os.path.join(VAULT_DIR, ".git")
 
     if os.path.isdir(git_dir):
-        # 既に初期化済み→ pull して最新化
+        # Already initialized -> git pull
         _log(f"Vault already initialized at {VAULT_DIR}. Running git pull...")
         try:
             result = subprocess.run(
@@ -599,7 +595,7 @@ def init_vault_from_github() -> None:
         except subprocess.CalledProcessError as e:
             _log(f"Warning: git pull failed (continuing): {e.stderr.strip()}")
     else:
-        # 未初期化 → git clone
+        # Not initialized -> git clone
         _log(f"Initializing vault from {github_repo} into {VAULT_DIR} ...")
         os.makedirs(VAULT_DIR, exist_ok=True)
         parent_dir = os.path.dirname(VAULT_DIR)
@@ -618,19 +614,19 @@ def init_vault_from_github() -> None:
 
 def setup_obsidian_auth() -> None:
     """
-    OBSIDIAN_AUTH_TOKEN 環境変数から Obsidian の認証トークンを復元する。
-    obsidian-headless は ~/.config/obsidian-headless/auth_token を読む。
-    Cloud Run では Secret Manager 経由でこの env var に注入する。
+    OBSIDIAN_AUTH_TOKEN Restoring Obsidian Auth Token from env var.
+    obsidian-headless Reads ~/.obsidian-headless/auth_token.
+    Cloud Run Injected via Secret Manager in Cloud Run.
 
-    参考: https://forum.obsidian.md/t/headless-sync-how-to-get-obsidian-auth-token-variable/111740/2
+    Ref: https://forum.obsidian.md/t/headless-sync-how-to-get-obsidian-auth-token-variable/111740/2
     """
     token = os.getenv("OBSIDIAN_AUTH_TOKEN", "")
     if not token:
         _log("OBSIDIAN_AUTH_TOKEN not set. Obsidian Sync may not work without authentication.")
         return
 
-    # obsidian-headless がトークンを読むパス
-    # 参考: https://forum.obsidian.md/t/headless-sync-how-to-get-obsidian-auth-token-variable/111740/
+    # obsidian-headless Path where token is read
+    # Ref: https://forum.obsidian.md/t/headless-sync-how-to-get-obsidian-auth-token-variable/111740/
     auth_dir = os.path.expanduser("~/.obsidian-headless")
     os.makedirs(auth_dir, exist_ok=True)
     auth_file = os.path.join(auth_dir, "auth_token")
@@ -643,10 +639,10 @@ def setup_obsidian_auth() -> None:
 
 def setup_obsidian_vault() -> None:
     """
-    OBSIDIAN_VAULT_ID が設定されていて、かつ vault の sync 設定がされていない場合に
-    ob sync-setup を実行して Obsidian Sync を使えるようにする。
+    OBSIDIAN_VAULT_ID If set and sync is not configured,
+    ob sync-setup run for initial sync setup.
 
-    ob sync-setup は同じ vault ID + path の組み合わせで何度実行しても安全。
+    ob sync-setup Safe to run multiple times with same vault ID.
     """
     vault_id = os.getenv("OBSIDIAN_VAULT_ID", "")
     if not vault_id:
