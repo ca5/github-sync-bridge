@@ -112,7 +112,7 @@ export default class SyncBridgePlugin extends Plugin {
                     new Notice('先にサーバーに接続してください');
                     return;
                 }
-                new BranchSuggestModal(this.app, tab.gitBranches.branches, async (branch) => {
+                new BranchSuggestModal(this.app, tab.gitBranches.branches, tab.gitStatus?.branch ?? '不明', async (branch) => {
                     await tab.checkoutBranch(branch);
                 }).open();
             },
@@ -182,13 +182,15 @@ class CommitMessageModal extends Modal {
 /** ブランチ選択モーダル（コマンドパレット風） */
 class BranchSuggestModal extends SuggestModal<string> {
     private branches: string[];
+    private currentBranch: string;
     private onChoose: (branch: string) => void;
 
-    constructor(app: App, branches: string[], onChoose: (branch: string) => void) {
+    constructor(app: App, branches: string[], currentBranch: string, onChoose: (branch: string) => void) {
         super(app);
         this.branches = branches;
+        this.currentBranch = currentBranch;
         this.onChoose = onChoose;
-        this.setPlaceholder('ブランチを選択...');
+        this.setPlaceholder(`現在のブランチ: 🌿 ${currentBranch} | 切り替えるブランチを選択...`);
     }
 
     getSuggestions(query: string): string[] {
@@ -196,10 +198,17 @@ class BranchSuggestModal extends SuggestModal<string> {
     }
 
     renderSuggestion(branch: string, el: HTMLElement) {
-        el.createEl('div', { text: `🌿 ${branch}` });
+        if (branch === this.currentBranch) {
+            el.createEl('div', { text: `🌿 ${branch} (現在)` });
+            el.style.opacity = '0.5';
+        } else {
+            el.createEl('div', { text: `🌿 ${branch}` });
+        }
     }
 
     onChooseSuggestion(branch: string) {
+        // 現在のブランチと同じなら何もしない
+        if (branch === this.currentBranch) return;
         this.onChoose(branch);
     }
 }
@@ -552,7 +561,7 @@ class SyncSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('接続')
-            .setDesc(this.remoteSettings ? '✅ 接続済み' : '未接続')
+            .setDesc(this.remoteSettings ? `✅ 接続済み (現在のブランチ: 🌿 ${this.gitStatus?.branch ?? '不明'})` : '未接続')
             .addButton(btn => btn
                 .setButtonText('Connect & Load')
                 .setCta()
