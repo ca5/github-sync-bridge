@@ -657,8 +657,17 @@ def setup_obsidian_vault() -> None:
             cwd=VAULT_DIR
         )
         _log(f"ob sync-setup successful: {result.stdout.strip()}")
+        
+        # Configure what gets synced (e.g. plugins, themes, etc.)
+        config_result = subprocess.run(
+            [OB_CMD, "sync-config", "--path", VAULT_DIR, "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"],
+            capture_output=True, text=True, check=True,
+            cwd=VAULT_DIR
+        )
+        _log(f"ob sync-config successful: {config_result.stdout.strip()}")
+
     except subprocess.CalledProcessError as e:
-        _log(f"ob sync-setup failed: {_trim_error(e.stderr)}")
+        _log(f"ob sync-setup or config failed: {_trim_error(e.stderr)}")
         _log("Obsidian Sync may not work. Check OBSIDIAN_VAULT_ID and OBSIDIAN_AUTH_TOKEN.")
     except FileNotFoundError:
         _log(f"ob command not found at: {OB_CMD}")
