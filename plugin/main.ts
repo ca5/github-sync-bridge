@@ -54,6 +54,11 @@ export default class SyncBridgePlugin extends Plugin {
         this.settingTab = tab;
         this.addSettingTab(tab);
 
+        // 起動時に自動でサーバーに接続（バックグラウンドで静かに）
+        this.app.workspace.onLayoutReady(() => {
+            this.settingTab?.fetchAll(true);
+        });
+
         // ─── コマンドパレット ─────────────────────────────
 
         this.addCommand({
@@ -362,7 +367,7 @@ class SyncSettingTab extends PluginSettingTab {
         }, 3000);
     }
 
-    async fetchAll() {
+    async fetchAll(silent: boolean = false) {
         try {
             [this.remoteSettings, this.syncStatus, this.gitStatus, this.gitBranches] =
                 await Promise.all([
@@ -374,7 +379,7 @@ class SyncSettingTab extends PluginSettingTab {
             // 接続成功 → 初期化待ち状態を解除
             this.stopRetry();
             this.isInitializing = false;
-            new Notice('✅ サーバーに接続しました');
+            if (!silent) new Notice('✅ サーバーに接続しました');
         } catch (e: any) {
             if (e.isInitializing) {
                 this.isInitializing = true;
@@ -382,7 +387,11 @@ class SyncSettingTab extends PluginSettingTab {
                 this.initLog = e.log;
                 this.scheduleRetry();
             } else {
-                new Notice(`❌ 接続失敗: ${e.message}`);
+                if (!silent) new Notice(`❌ 接続失敗: ${e.message}`);
+                // エラー時は状態をクリア
+                this.syncStatus = null;
+                this.gitStatus = null;
+                this.gitBranches = null;
             }
         }
         this.display();
