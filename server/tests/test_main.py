@@ -80,7 +80,9 @@ def _make_proc(stdout="", returncode=0):
     return m
 
 @patch("subprocess.run")
-def test_force_sync_execution(mock_run):
+@patch("app.main.check_vault_safety")
+def test_force_sync_execution(mock_check_safety, mock_run):
+    mock_check_safety.return_value = (True, "")
     mock_result = MagicMock()
     mock_result.stdout = "Mocked Output"
     mock_run.return_value = mock_result
@@ -93,7 +95,7 @@ def test_force_sync_execution(mock_run):
 
     calls = mock_run.call_args_list
     assert len(calls) == 1
-    assert calls[0][0][0][1:] == ["sync"]
+    assert calls[0][0][0][1:] == ["sync", "--path", os.getenv("VAULT_DIR", os.path.join(os.path.abspath(os.path.join(os.path.dirname(main_module.__file__), "../..")), "vault"))]
 
 
 # =========================================================
@@ -166,6 +168,7 @@ def test_git_status_git_error(mock_git):
 def test_git_branches_success(mock_git):
     """ローカル + リモートのブランチを重複なく返す"""
     mock_git.side_effect = [
+        _make_proc(""),                                # fetch origin --prune
         _make_proc("main\n"),                          # rev-parse
         _make_proc("main\nfeature-x\n"),               # branch local
         _make_proc("origin/main\norigin/feature-x\norigin/HEAD\n"),  # branch -r
@@ -223,7 +226,7 @@ def test_git_checkout_mode_stash(mock_git):
     data = response.json()
     assert data["status"] == "success"
     assert data["branch"] == "feature-x"
-    assert "引き継ぎ" in data["note"]
+    assert "Carried over changes" in data["note"]
 
 @patch("app.main._git")
 def test_git_checkout_mode_stash_untracked_only(mock_git):
@@ -243,7 +246,7 @@ def test_git_checkout_mode_stash_untracked_only(mock_git):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert "引き継ぎ" in data["note"]
+    assert "Carried over changes" in data["note"]
 
 @patch("app.main._git")
 def test_git_checkout_mode_commit_push(mock_git):
@@ -285,7 +288,7 @@ def test_git_checkout_mode_discard(mock_git):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert "破棄" in data["note"]
+    assert "Discarded" in data["note"]
 
 @patch("app.main._git")
 def test_git_checkout_invalid_mode(mock_git):
