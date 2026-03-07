@@ -303,6 +303,7 @@ def git_branches(x_api_key: Optional[str] = Header(None)):
     """ローカル + Return list of remote branches"""
     verify_api_key(x_api_key)
     try:
+        _git(["fetch", "origin", "--prune"])
         current = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
         local_raw = _git(["branch", "--format=%(refname:short)"]).stdout.strip()
         remote_raw = _git(["branch", "-r", "--format=%(refname:short)"]).stdout.strip()
