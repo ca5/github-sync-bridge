@@ -427,6 +427,8 @@ class SyncSettingTab extends PluginSettingTab {
                 const noteText = result.note ? ` (${result.note})` : '';
                 new Notice(`✅ ${branch} に切り替えました${noteText}`);
                 await this.refreshStatus();
+                // ブランチ切り替え後は強制同期も実行してiPhone等にすぐ反映させる
+                await this.forceSync();
             };
 
             if (!hasDirty) {
