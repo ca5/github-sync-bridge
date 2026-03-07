@@ -353,7 +353,7 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
                 # Discard tracked changes + Delete untracked files
                 _git(["checkout", "--", "."])
                 _git(["clean", "-fd"])
-                note = "Discarded uncommitted changes"
+                note = "未コミットの変更を破棄しました"
 
             else:
                 raise HTTPException(status_code=400, detail=f"Unknown mode: {req.mode}")
@@ -367,7 +367,7 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
         if note == "__stash_pop__":
             try:
                 _git(["stash", "pop"])
-                note = "Carried over changes to new branch"
+                note = "変更を新しいブランチに引き継ぎました"
             except subprocess.CalledProcessError:
                 note = "変更を stash しました（'git stash pop' で後で復元できます）"
 

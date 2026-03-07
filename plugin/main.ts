@@ -1,7 +1,6 @@
 import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, SuggestModal, requestUrl, moment } from 'obsidian';
 
 // ─── i18n ────────────────────────────────────────────────
-import { moment } from 'obsidian';
 const STRINGS = {
     en: {
         cmdConnect: "Connect server / Fetch status",
@@ -30,6 +29,15 @@ const STRINGS = {
         optCommitPushDesc: "Commit current changes and push to remote",
         optDiscard: "🗑️ Discard and checkout",
         optDiscardDesc: "Discard all uncommitted changes and checkout (irreversible)",
+        lblCheckoutBranch: "🔀 Checkout branch: ",
+        checkoutConflictDesc: "Uncommitted changes exist. How would you like to proceed?",
+        lblCommitMsgOpt: "📝 Commit & Push message (optional)",
+        descCommitMsgOpt: "Auto-generated if empty",
+        placeholderCommitMsg: "Commit message...",
+        btnForceSync: "Force Sync",
+        btnStash: "Stash",
+        btnCommitPush: "Commit & Push",
+        btnDiscard: "Discard & Switch",
         msgConnected: "✅ Connected to server",
         msgConnFailed: "❌ Connection failed: ",
         msgForceSyncing: "🔄 Force syncing...",
@@ -48,6 +56,8 @@ const STRINGS = {
         msgPullFailed: "❌ Pull failed: ",
         msgSettingsSaved: "✅ Settings saved",
         msgSettingsFailed: "❌ Failed to save settings: ",
+        msgRefreshFailed: "❌ Failed to refresh status: ",
+        msgCheckoutFailed: "❌ Checkout failed: ",
         secServerConn: "🔌 Server Connection",
         lblServerUrl: "Server URL",
         descServerUrl: "URL of the sync server",
@@ -85,7 +95,8 @@ const STRINGS = {
         descCheckout: "Auto git pull will run after checkout",
         lblCommitPush: "Commit & Push",
         btnPush: "⬆️ Push",
-        btnPull: "⬇️ Pull"
+        btnPull: "⬇️ Pull",
+        valUnknown: "Unknown"
     },
     ja: {
         cmdConnect: "サーバーに接続 / ステータス取得",
@@ -132,6 +143,8 @@ const STRINGS = {
         msgPullFailed: "❌ Pull 失敗: ",
         msgSettingsSaved: "✅ 設定を保存しました",
         msgSettingsFailed: "❌ 設定保存失敗: ",
+        msgRefreshFailed: "❌ ステータス更新失敗: ",
+        msgCheckoutFailed: "❌ 切り替え失敗: ",
         secServerConn: "🔌 サーバー接続",
         lblServerUrl: "Server URL",
         descServerUrl: "同期サーバーの URL",
@@ -169,12 +182,22 @@ const STRINGS = {
         descCheckout: "切り替え後は自動で git pull が実行されます",
         lblCommitPush: "コミット & Push",
         btnPush: "⬆️ Push",
-        btnPull: "⬇️ Pull"
+        btnPull: "⬇️ Pull",
+        lblCheckoutBranch: "🔀 ブランチ切り替え: ",
+        checkoutConflictDesc: "未コミットの変更があります。どのように処理しますか？",
+        lblCommitMsgOpt: "📝 コミット & Push のメッセージ（省略可）",
+        descCommitMsgOpt: "空欄の場合は自動生成されます",
+        placeholderCommitMsg: "コミットメッセージ...",
+        btnForceSync: "強制同期",
+        btnStash: "Stash",
+        btnCommitPush: "コミット & Push",
+        btnDiscard: "破棄して切り替え",
+        valUnknown: "不明"
     }
 };
 
 function t(key: keyof typeof STRINGS.en): string {
-    const lang = moment.locale() === 'ja' ? 'ja' : 'en';
+    const lang = moment.locale().startsWith('ja') ? 'ja' : 'en';
     return STRINGS[lang]?.[key] || STRINGS.en[key];
 }
 // ─────────────────────────────────────────────────────────
@@ -293,7 +316,7 @@ export default class SyncBridgePlugin extends Plugin {
                     new Notice(t('connectFirst'));
                     return;
                 }
-                new BranchSuggestModal(this.app, tab.gitBranches.branches, tab.gitStatus?.branch ?? '不明', async (branch) => {
+                new BranchSuggestModal(this.app, tab.gitBranches.branches, tab.gitStatus?.branch ?? t('valUnknown'), async (branch) => {
                     await tab.checkoutBranch(branch);
                 }).open();
             },
@@ -325,7 +348,7 @@ class CommitMessageModal extends Modal {
 
     onOpen() {
         const { contentEl } = this;
-        contentEl.createEl('h3', { text: 'Git コミット' });
+        contentEl.createEl('h3', { text: t('cmdGitCommit') });
 
         new Setting(contentEl)
             .setName(t('commitMessageTitle'))
@@ -415,9 +438,9 @@ class CheckoutModeModal extends Modal {
 
     onOpen() {
         const { contentEl } = this;
-        contentEl.createEl('h3', { text: `🔀 ブランチ切り替え: ${this.branch}` });
+        contentEl.createEl('h3', { text: `${t('lblCheckoutBranch')}${this.branch}` });
         contentEl.createEl('p', {
-            text: `未コミットの変更が ${this.changedFiles.length} 件あります。どのように処理しますか？`,
+            text: t('checkoutConflictDesc'),
         });
 
         // 変更ファイル一覧（折りたたみ）
@@ -432,34 +455,34 @@ class CheckoutModeModal extends Modal {
 
         // コミットメッセージ欄（commit_push 用）
         const commitMsgSetting = new Setting(contentEl)
-            .setName('📝 コミット & Push のメッセージ（省略可）')
-            .setDesc('空欄の場合は自動生成されます')
+            .setName(t('lblCommitMsgOpt'))
+            .setDesc(t('descCommitMsgOpt'))
             .addText(text => text
-                .setPlaceholder('コミットメッセージ...')
+                .setPlaceholder(t('placeholderCommitMsg'))
                 .onChange(v => { this.commitMessage = v; }));
 
         // ── 3択ボタン ─────────────────────────────────────
 
         new Setting(contentEl)
             .setName(t('optStash'))
-            .setDesc('変更を一時保存し、新ブランチに持ち込む')
+            .setDesc(t('optStashDesc'))
             .addButton(btn => btn
-                .setButtonText('Stash')
+                .setButtonText(t('btnStash'))
                 .setCta()
                 .onClick(() => { this.close(); this.onChoose('stash'); }));
 
         new Setting(contentEl)
-            .setName('⬆️ コミット & Push してから切り替え')
-            .setDesc('現在のブランチにコミット・Push してから切り替える')
+            .setName(t('optCommitPush'))
+            .setDesc(t('optCommitPushDesc'))
             .addButton(btn => btn
-                .setButtonText('Commit & Push')
+                .setButtonText(t('btnCommitPush'))
                 .onClick(() => { this.close(); this.onChoose('commit_push', this.commitMessage); }));
 
         new Setting(contentEl)
-            .setName('🗑️ 変更を破棄して切り替え')
-            .setDesc('未コミットの変更をすべて削除してから切り替える（元に戻せません）')
+            .setName(t('optDiscard'))
+            .setDesc(t('optDiscardDesc'))
             .addButton(btn => btn
-                .setButtonText('Discard & Switch')
+                .setButtonText(t('btnDiscard'))
                 .setWarning()
                 .onClick(() => { this.close(); this.onChoose('discard'); }));
 
@@ -602,7 +625,7 @@ class SyncSettingTab extends PluginSettingTab {
                 this.initLog = e.log;
                 this.scheduleRetry();
             } else {
-                new Notice(`ステータス更新失敗: ${e.message}`);
+                new Notice(`${t('msgRefreshFailed')}${e.message}`);
             }
         }
         this.display();
@@ -640,13 +663,13 @@ class SyncSettingTab extends PluginSettingTab {
                         try {
                             await doCheckout(mode, commitMessage);
                         } catch (e: any) {
-                            new Notice(`❌ 切り替え失敗: ${e.message}`);
+                            new Notice(`${t('msgCheckoutFailed')}${e.message}`);
                         }
                     }
                 ).open();
             }
         } catch (e: any) {
-            new Notice(`❌ 切り替え失敗: ${e.message}`);
+            new Notice(`${t('msgCheckoutFailed')}${e.message}`);
         }
     }
 
@@ -656,11 +679,11 @@ class SyncSettingTab extends PluginSettingTab {
             return;
         }
         try {
-            new Notice('📝 コミット中...');
+            new Notice(t('msgCommitting'));
             await this.apiPost('/api/git/commit', { message: this.commitMessage });
-            new Notice('✅ コミットしました');
+            new Notice(t('msgCommitted'));
             this.commitMessage = '';
-        } catch (e) {
+        } catch (e: any) {
             new Notice(`${t('msgCommitFailed')}${e.message}`);
         }
         await this.refreshStatus();
@@ -668,10 +691,10 @@ class SyncSettingTab extends PluginSettingTab {
 
     async pushChanges() {
         try {
-            new Notice('⬆️ Push 中...');
+            new Notice(t('msgPushing'));
             const result = await this.apiPost<{ branch: string }>('/api/git/push');
-            new Notice(`✅ ${result.branch} を Push しました`);
-        } catch (e) {
+            new Notice(`${t('msgPushDone')} (${result.branch})`);
+        } catch (e: any) {
             new Notice(`${t('msgPushFailed')}${e.message}`);
         }
         await this.refreshStatus();
@@ -679,10 +702,10 @@ class SyncSettingTab extends PluginSettingTab {
 
     async pullChanges() {
         try {
-            new Notice('⬇️ Pull 中...');
+            new Notice(t('msgPulling'));
             const result = await this.apiPost<{ branch: string; output: string }>('/api/git/pull');
-            new Notice(`✅ Pull 完了 (${result.branch})`);
-        } catch (e) {
+            new Notice(`${t('msgPullDone')} (${result.branch})`);
+        } catch (e: any) {
             new Notice(`${t('msgPullFailed')}${e.message}`);
         }
         await this.refreshStatus();
@@ -818,7 +841,7 @@ class SyncSettingTab extends PluginSettingTab {
             .setName(t('lblForceSync'))
             .setDesc(t('descForceSync'))
             .addButton(btn => btn
-                .setButtonText('Force Sync')
+                .setButtonText(t('btnForceSync'))
                 .setWarning()
                 .onClick(() => this.forceSync()));
 
@@ -887,9 +910,9 @@ class SyncSettingTab extends PluginSettingTab {
                     .onChange((value) => { this.commitMessage = value; }));
 
             new Setting(containerEl)
-                .setName('Git 操作')
+                .setName(t('secGitOps'))
                 .addButton(btn => btn
-                    .setButtonText('📝 Commit')
+                    .setButtonText(t('btnCommit'))
                     .onClick(() => this.commitChanges()))
                 .addButton(btn => btn
                     .setButtonText(t('btnPush'))
