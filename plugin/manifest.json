@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "minAppVersion": "0.15.0",
   "description": "Control your remote sync server settings (like syncing the .obsidian folder).",
-  "author": "Obsidian User",
-  "authorUrl": "",
+  "author": "Ca5",
+  "authorUrl": "https://ca5.me",
   "isDesktopOnly": false
 }
