@@ -197,7 +197,10 @@ const STRINGS = {
 };
 
 function t(key: keyof typeof STRINGS.en): string {
-    const lang = moment.locale().startsWith('ja') ? 'ja' : 'en';
+    // Obsidian's setting language is stored in localStorage.
+    // Use it as primary source, falling back to moment.locale() (system/app locale).
+    const rawLang = window.localStorage.getItem('language') || moment.locale() || 'en';
+    const lang = rawLang.toLowerCase().startsWith('ja') ? 'ja' : 'en';
     return STRINGS[lang]?.[key] || STRINGS.en[key];
 }
 // ─────────────────────────────────────────────────────────
@@ -299,7 +302,7 @@ export default class SyncBridgePlugin extends Plugin {
             id: 'git-commit',
             name: t('cmdGitCommit'),
             callback: () => {
-                new CommitMessageModal(this.app, async (message) => {
+                new GitSyncCommitModal(this.app, async (message) => {
                     if (!this.settingTab) return;
                     this.settingTab.commitMessage = message;
                     await this.settingTab.commitChanges();
@@ -316,7 +319,7 @@ export default class SyncBridgePlugin extends Plugin {
                     new Notice(t('connectFirst'));
                     return;
                 }
-                new BranchSuggestModal(this.app, tab.gitBranches.branches, tab.gitStatus?.branch ?? t('valUnknown'), async (branch) => {
+                new GitSyncBranchModal(this.app, tab.gitBranches.branches, tab.gitStatus?.branch ?? t('valUnknown'), async (branch) => {
                     await tab.checkoutBranch(branch);
                 }).open();
             },
@@ -337,7 +340,7 @@ export default class SyncBridgePlugin extends Plugin {
 // ─── コマンド用モーダル ──────────────────────────────────
 
 /** コミットメッセージ入力モーダル */
-class CommitMessageModal extends Modal {
+class GitSyncCommitModal extends Modal {
     private onSubmit: (message: string) => void;
     private input = '';
 
@@ -384,7 +387,7 @@ class CommitMessageModal extends Modal {
 }
 
 /** ブランチ選択モーダル（コマンドパレット風） */
-class BranchSuggestModal extends SuggestModal<string> {
+class GitSyncBranchModal extends SuggestModal<string> {
     private branches: string[];
     private currentBranch: string;
     private onChoose: (branch: string) => void;
@@ -418,7 +421,7 @@ class BranchSuggestModal extends SuggestModal<string> {
 }
 
 /** ブランチ切り替え時の未コミット変更処理方法を選ぶモーダル */
-class CheckoutModeModal extends Modal {
+class GitSyncCheckoutConflictModal extends Modal {
     private branch: string;
     private changedFiles: string[];
     private onChoose: (mode: string, commitMessage?: string) => void;
@@ -655,7 +658,7 @@ class SyncSettingTab extends PluginSettingTab {
             if (!hasDirty) {
                 await doCheckout('stash');
             } else {
-                new CheckoutModeModal(
+                new GitSyncCheckoutConflictModal(
                     this.app,
                     branch,
                     status.changed_files,
