@@ -283,7 +283,12 @@ class CommitRequest(BaseModel):
 
 class CheckoutRequest(BaseModel):
     branch: str
-    force: bool = False  # True の場合、未コミット変更を stash してから切り替え
+    # 未コミット変更がある場合の処理方法
+    # - "stash"       : stash して新ブランチに引き継ぐ
+    # - "commit_push" : コミットして push してから切り替える
+    # - "discard"     : 変更を捨ててから切り替える
+    mode: str = "stash"        # デフォルト: stash
+    commit_message: str = ""   # mode=commit_push の場合に使うコミットメッセージ
 
 @app.get("/api/git/status")
 def git_status(x_api_key: Optional[str] = Header(None)):
@@ -324,49 +329,66 @@ def git_branches(x_api_key: Optional[str] = Header(None)):
 
 @app.post("/api/git/checkout")
 def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
-    """ブランチを切り替える。force=True なら未コミット変更を stash 後に切り替え。切り替え後に git pull を実行。"""
+    """
+    ブランチを切り替える。切り替え後に git pull を実行。
+    mode によって未コミット変更の処理方法を選択できる。
+    """
     verify_api_key(x_api_key)
     try:
         # 未コミット変更チェック（未追跡ファイル「??」は git checkout をブロックしないため除外）
         status_lines = _git(["status", "--short"]).stdout.strip().splitlines()
         tracked_changes = [line for line in status_lines if line and not line.startswith("??")]
 
-        stashed = False
+        note = ""
+
         if tracked_changes:
-            if not req.force:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "未コミットの変更があるためブランチを切り替えられません。"
-                        "先にコミットするか、force=true で切り替えてください。\n"
-                        + "\n".join(tracked_changes)
-                    )
-                )
-            # force=True: stash して変更を退避
-            _git(["stash", "push", "-m", f"auto-stash before checkout {req.branch}"])
-            stashed = True
+            if req.mode == "stash":
+                # 変更を stash して新ブランチに引き継ぐ
+                _git(["stash", "push", "-m", f"auto-stash before checkout {req.branch}"])
+                # checkout 後に pop——後ステップで実行
+                note = "__stash_pop__"  # 後フラグ
+
+            elif req.mode == "commit_push":
+                # コミットメッセージが空の場合は自動生成
+                msg = req.commit_message.strip() or f"auto-commit before checkout {req.branch}"
+                _git(["add", "-A"])
+                _git(["commit", "-m", msg])
+                current_branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+                _git(["push", "origin", current_branch])
+                note = f"\u5225ブランチ ({current_branch}) にコミット・ Push しました"
+
+            elif req.mode == "discard":
+                # 追跡済み変更を廣棄（untracked は clean -fd で別途対処）
+                _git(["checkout", "--", "."])
+                _git(["clean", "-fd"])
+                note = "未コミットの変更を破棄しました"
+
+            else:
+                raise HTTPException(status_code=400, detail=f"Unknown mode: {req.mode}")
 
         # ブランチ切り替え（リモートにしかない場合は自動でトラッキング）
         _git(["checkout", "-B", req.branch, f"origin/{req.branch}"])
         # git pull
         pull_result = _git(["pull", "origin", req.branch])
 
-        stash_note = ""
-        if stashed:
+        # stash pop（mode=stash の場合）
+        if note == "__stash_pop__":
             try:
                 _git(["stash", "pop"])
+                note = "変更を新ブランチに引き継ぎました"
             except subprocess.CalledProcessError:
-                stash_note = " (未コミット変更を stash しました。'git stash pop' で復元できます)"
+                note = "変更を stash しました（'git stash pop' で後で復元できます）"
 
         return {
             "status": "success",
             "branch": req.branch,
-            "pull_output": pull_result.stdout.strip() + stash_note,
+            "pull_output": pull_result.stdout.strip(),
+            "note": note,
         }
     except HTTPException:
         raise
     except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"git checkout failed: {e.stderr}")
+        raise HTTPException(status_code=500, detail=f"git checkout failed: {_trim_error(e.stderr)}")
 
 @app.post("/api/git/commit")
 def git_commit(req: CommitRequest, x_api_key: Optional[str] = Header(None)):

@@ -232,20 +232,80 @@ def test_git_checkout_success(mock_git):
     assert "Already up to date" in data["pull_output"]
 
 @patch("app.main._git")
-def test_git_checkout_dirty_fails(mock_git):
-    """追跡済みファイルに未コミット変更がある状態では 409 を返す"""
+def test_git_checkout_mode_stash(mock_git):
+    """mode=stash: stash → checkout → pull → stash pop"""
     mock_git.side_effect = [
-        _make_proc(" M journal/2026/03/04.md\n"),  # status --short（追跡済み変更）
+        _make_proc(" M journal/2026/03/04.md\n"),        # status --short（追跡済み変更）
+        _make_proc("Saved working directory\n"),          # stash push
+        _make_proc("Switched to branch 'feature-x'\n"),  # checkout -B
+        _make_proc("Already up to date.\n"),              # pull
+        _make_proc("Applied stash\n"),                    # stash pop
     ]
     response = client.post(
         "/api/git/checkout",
         headers={"X-API-Key": "test-secret-key"},
-        json={"branch": "feature-x"}
+        json={"branch": "feature-x", "mode": "stash"},
     )
-    assert response.status_code == 409
-    assert "未コミット" in response.json()["detail"]
-    # status だけが呼ばれ、checkout は呼ばれていない
-    assert mock_git.call_count == 1
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["branch"] == "feature-x"
+    assert "引き継ぎ" in data["note"]
+
+@patch("app.main._git")
+def test_git_checkout_mode_commit_push(mock_git):
+    """mode=commit_push: add → commit → push → checkout → pull"""
+    mock_git.side_effect = [
+        _make_proc(" M journal/2026/03/04.md\n"),        # status --short
+        _make_proc(""),                                   # add -A
+        _make_proc("[main abc1234] auto-commit\n"),       # commit
+        _make_proc("main\n"),                             # rev-parse
+        _make_proc("To github.com:...\n"),                # push
+        _make_proc("Switched to branch 'feature-x'\n"),  # checkout -B
+        _make_proc("Already up to date.\n"),              # pull
+    ]
+    response = client.post(
+        "/api/git/checkout",
+        headers={"X-API-Key": "test-secret-key"},
+        json={"branch": "feature-x", "mode": "commit_push", "commit_message": "my commit"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert "Push" in data["note"]
+
+@patch("app.main._git")
+def test_git_checkout_mode_discard(mock_git):
+    """mode=discard: checkout -- . → clean -fd → checkout -B → pull"""
+    mock_git.side_effect = [
+        _make_proc(" M journal/2026/03/04.md\n"),        # status --short
+        _make_proc(""),                                   # checkout -- .
+        _make_proc(""),                                   # clean -fd
+        _make_proc("Switched to branch 'feature-x'\n"),  # checkout -B
+        _make_proc("Already up to date.\n"),              # pull
+    ]
+    response = client.post(
+        "/api/git/checkout",
+        headers={"X-API-Key": "test-secret-key"},
+        json={"branch": "feature-x", "mode": "discard"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert "破棄" in data["note"]
+
+@patch("app.main._git")
+def test_git_checkout_invalid_mode(mock_git):
+    """mode が不正な値なら 400 を返す"""
+    mock_git.side_effect = [
+        _make_proc(" M journal/2026/03/04.md\n"),  # status --short
+    ]
+    response = client.post(
+        "/api/git/checkout",
+        headers={"X-API-Key": "test-secret-key"},
+        json={"branch": "feature-x", "mode": "invalid_mode"},
+    )
+    assert response.status_code == 400
 
 @patch("app.main._git")
 def test_git_checkout_untracked_only_succeeds(mock_git):

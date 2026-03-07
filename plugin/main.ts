@@ -200,6 +200,86 @@ class BranchSuggestModal extends SuggestModal<string> {
     }
 }
 
+/** ブランチ切り替え時の未コミット変更処理方法を選ぶモーダル */
+class CheckoutModeModal extends Modal {
+    private branch: string;
+    private changedFiles: string[];
+    private onChoose: (mode: string, commitMessage?: string) => void;
+    private commitMessage = '';
+
+    constructor(
+        app: App,
+        branch: string,
+        changedFiles: string[],
+        onChoose: (mode: string, commitMessage?: string) => void,
+    ) {
+        super(app);
+        this.branch = branch;
+        this.changedFiles = changedFiles;
+        this.onChoose = onChoose;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.createEl('h3', { text: `🔀 ブランチ切り替え: ${this.branch}` });
+        contentEl.createEl('p', {
+            text: `未コミットの変更が ${this.changedFiles.length} 件あります。どのように処理しますか？`,
+        });
+
+        // 変更ファイル一覧（折りたたみ）
+        if (this.changedFiles.length > 0) {
+            const details = contentEl.createEl('details');
+            details.createEl('summary', { text: `変更ファイル (${this.changedFiles.length} 件)` });
+            const ul = details.createEl('ul', { cls: 'git-changed-files' });
+            this.changedFiles.forEach(f => ul.createEl('li', { text: f }));
+        }
+
+        contentEl.createEl('hr');
+
+        // コミットメッセージ欄（commit_push 用）
+        const commitMsgSetting = new Setting(contentEl)
+            .setName('📝 コミット & Push のメッセージ（省略可）')
+            .setDesc('空欄の場合は自動生成されます')
+            .addText(text => text
+                .setPlaceholder('コミットメッセージ...')
+                .onChange(v => { this.commitMessage = v; }));
+
+        // ── 3択ボタン ─────────────────────────────────────
+
+        new Setting(contentEl)
+            .setName('📦 Stash して引き継ぐ')
+            .setDesc('変更を一時保存し、新ブランチに持ち込む')
+            .addButton(btn => btn
+                .setButtonText('Stash')
+                .setCta()
+                .onClick(() => { this.close(); this.onChoose('stash'); }));
+
+        new Setting(contentEl)
+            .setName('⬆️ コミット & Push してから切り替え')
+            .setDesc('現在のブランチにコミット・Push してから切り替える')
+            .addButton(btn => btn
+                .setButtonText('Commit & Push')
+                .onClick(() => { this.close(); this.onChoose('commit_push', this.commitMessage); }));
+
+        new Setting(contentEl)
+            .setName('🗑️ 変更を破棄して切り替え')
+            .setDesc('未コミットの変更をすべて削除してから切り替える（元に戻せません）')
+            .addButton(btn => btn
+                .setButtonText('Discard & Switch')
+                .setWarning()
+                .onClick(() => { this.close(); this.onChoose('discard'); }));
+
+        new Setting(contentEl)
+            .addButton(btn => btn
+                .setButtonText('キャンセル')
+                .onClick(() => this.close()));
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
 // ─── 設定タブ ────────────────────────────────────────────
 
 class SyncSettingTab extends PluginSettingTab {
@@ -334,13 +414,40 @@ class SyncSettingTab extends PluginSettingTab {
 
     async checkoutBranch(branch: string) {
         try {
-            new Notice(`🔀 ${branch} に切り替え中...`);
-            await this.apiPost('/api/git/checkout', { branch, force: true });
-            new Notice(`✅ ${branch} に切り替えました`);
+            // git status を確認して未コミット変更があれば選択モーダルを表示
+            const status = await this.apiGet<GitStatus>('/api/git/status');
+            const hasDirty = !status.is_clean;
+
+            const doCheckout = async (mode: string, commitMessage?: string) => {
+                new Notice(`🔀 ${branch} に切り替え中...`);
+                const result = await this.apiPost<{ branch: string; note: string }>(
+                    '/api/git/checkout',
+                    { branch, mode, commit_message: commitMessage ?? '' }
+                );
+                const noteText = result.note ? ` (${result.note})` : '';
+                new Notice(`✅ ${branch} に切り替えました${noteText}`);
+                await this.refreshStatus();
+            };
+
+            if (!hasDirty) {
+                await doCheckout('stash');
+            } else {
+                new CheckoutModeModal(
+                    this.app,
+                    branch,
+                    status.changed_files,
+                    async (mode, commitMessage) => {
+                        try {
+                            await doCheckout(mode, commitMessage);
+                        } catch (e: any) {
+                            new Notice(`❌ 切り替え失敗: ${e.message}`);
+                        }
+                    }
+                ).open();
+            }
         } catch (e: any) {
             new Notice(`❌ 切り替え失敗: ${e.message}`);
         }
-        await this.refreshStatus();
     }
 
     async commitChanges() {
