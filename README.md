@@ -180,7 +180,7 @@ pnpm run deploy:plugin
 ```
 
 `plugin/main.js` と `plugin/manifest.json` がビルドされ、
-`vault/.obsidian/plugins/obsidian-sync-bridge/` に自動コピーされます。
+`vault/.obsidian/plugins/github-sync-bridge/` に自動コピーされます。
 
 その後 Obsidian でそのVaultを開き、**設定 → コミュニティプラグイン** から有効化してください。
 
@@ -198,7 +198,7 @@ pnpm run deploy:plugin:sync
 
 ### 4. プラグインの設定
 
-1. Obsidian の設定 → **obsidian-sync-bridge** を開く
+1. Obsidian の設定 → **github-sync-bridge** を開く
 2. **Server URL** を入力（例: `http://10.16.125.9:8000`、モバイルの場合はMacのIPアドレス）
 3. **API Key** を入力（デフォルト: `default-secret-key`）
 4. **「Connect & Load」** をタップ

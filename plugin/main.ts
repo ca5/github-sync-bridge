@@ -70,7 +70,7 @@ export default class SyncBridgePlugin extends Plugin {
 
         this.addCommand({
             id: 'force-sync',
-            name: 'Obsidian Sync: 強制同期',
+            name: 'Github Sync: 強制同期',
             callback: () => this.settingTab?.forceSync(),
         });
 
@@ -616,14 +616,14 @@ class SyncSettingTab extends PluginSettingTab {
                 .onClick(() => this.refreshStatus()));
 
         new Setting(containerEl)
-            .setName('Obsidian Sync 強制実行')
+            .setName('Github Sync 強制実行')
             .setDesc('今すぐサーバーで ob sync を実行します')
             .addButton(btn => btn
                 .setButtonText('Force Sync')
                 .setWarning()
                 .onClick(() => this.forceSync()));
 
-        // ── Obsidian Sync 設定 ────────────────────────────
+        // ── Github Sync 設定 ────────────────────────────
         containerEl.createEl('h2', { text: '⚙️ Sync 設定' });
 
         new Setting(containerEl)

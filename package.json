@@ -4,8 +4,8 @@
   "description": "Obsidian 3-Way Sync System",
   "private": true,
   "scripts": {
-    "build:plugin": "pnpm --filter obsidian-sync-bridge build",
-    "deploy:plugin": "pnpm run build:plugin && mkdir -p vault/.obsidian/plugins/obsidian-sync-bridge && cp plugin/main.js plugin/manifest.json vault/.obsidian/plugins/obsidian-sync-bridge/",
+    "build:plugin": "pnpm --filter github-sync-bridge build",
+    "deploy:plugin": "pnpm run build:plugin && mkdir -p vault/.obsidian/plugins/github-sync-bridge && cp plugin/main.js plugin/manifest.json vault/.obsidian/plugins/github-sync-bridge/",
     "deploy:plugin:sync": "pnpm run deploy:plugin && pnpm exec ob sync-config --path ./vault --configs community-plugin,community-plugin-data && pnpm exec ob sync --path ./vault"
   },
   "dependencies": {
