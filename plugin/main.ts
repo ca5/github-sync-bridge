@@ -54,9 +54,9 @@ export default class SyncBridgePlugin extends Plugin {
         this.settingTab = tab;
         this.addSettingTab(tab);
 
-        // 起動時に自動でサーバーに接続（バックグラウンドで静かに）
+        // 起動時に自動でサーバーに接続（バックグラウンドでテストするため、一旦通知ありに）
         this.app.workspace.onLayoutReady(() => {
-            this.settingTab?.fetchAll(true);
+            this.settingTab?.fetchAll();
         });
 
         // ─── コマンドパレット ─────────────────────────────
