@@ -332,33 +332,35 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
     """
     ブランチを切り替える。切り替え後に git pull を実行。
     mode によって未コミット変更の処理方法を選択できる。
+    未追跡ファイルも checkout をブロックする場合があるため、全変更をチェックする。
     """
     verify_api_key(x_api_key)
     try:
-        # 未コミット変更チェック（未追跡ファイル「??」は git checkout をブロックしないため除外）
         status_lines = _git(["status", "--short"]).stdout.strip().splitlines()
-        tracked_changes = [line for line in status_lines if line and not line.startswith("??")]
+        # 全変更（追跡済み＋未追跡どちらも checkout をブロックしうる）
+        all_changes    = [line for line in status_lines if line]
+        tracked_changes = [line for line in all_changes if not line.startswith("??")]
 
         note = ""
 
-        if tracked_changes:
+        if all_changes:
             if req.mode == "stash":
-                # 変更を stash して新ブランチに引き継ぐ
-                _git(["stash", "push", "-m", f"auto-stash before checkout {req.branch}"])
-                # checkout 後に pop——後ステップで実行
-                note = "__stash_pop__"  # 後フラグ
+                # --include-untracked: 追跡済み＋未追跡ファイルを両方 stash する
+                _git(["stash", "push", "--include-untracked",
+                      "-m", f"auto-stash before checkout {req.branch}"])
+                note = "__stash_pop__"
 
             elif req.mode == "commit_push":
-                # コミットメッセージが空の場合は自動生成
+                # git add -A で未追跡ファイルも含めてステージ → commit → push
                 msg = req.commit_message.strip() or f"auto-commit before checkout {req.branch}"
                 _git(["add", "-A"])
                 _git(["commit", "-m", msg])
                 current_branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
                 _git(["push", "origin", current_branch])
-                note = f"\u5225ブランチ ({current_branch}) にコミット・ Push しました"
+                note = f"別ブランチ ({current_branch}) にコミット・ Push しました"
 
             elif req.mode == "discard":
-                # 追跡済み変更を廣棄（untracked は clean -fd で別途対処）
+                # 追跡済み変更を破棄 + 未追跡ファイルを削除
                 _git(["checkout", "--", "."])
                 _git(["clean", "-fd"])
                 note = "未コミットの変更を破棄しました"

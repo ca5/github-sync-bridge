@@ -236,7 +236,7 @@ def test_git_checkout_mode_stash(mock_git):
     """mode=stash: stash → checkout → pull → stash pop"""
     mock_git.side_effect = [
         _make_proc(" M journal/2026/03/04.md\n"),        # status --short（追跡済み変更）
-        _make_proc("Saved working directory\n"),          # stash push
+        _make_proc("Saved working directory\n"),          # stash push --include-untracked
         _make_proc("Switched to branch 'feature-x'\n"),  # checkout -B
         _make_proc("Already up to date.\n"),              # pull
         _make_proc("Applied stash\n"),                    # stash pop
@@ -250,6 +250,26 @@ def test_git_checkout_mode_stash(mock_git):
     data = response.json()
     assert data["status"] == "success"
     assert data["branch"] == "feature-x"
+    assert "引き継ぎ" in data["note"]
+
+@patch("app.main._git")
+def test_git_checkout_mode_stash_untracked_only(mock_git):
+    """mode=stash: 未追跡ファイル（??）のみでも stash して checkout できる"""
+    mock_git.side_effect = [
+        _make_proc("?? new_note.md\n"),                  # status --short（未追跡のみ）
+        _make_proc("Saved working directory\n"),          # stash push --include-untracked
+        _make_proc("Switched to branch 'feature-x'\n"),  # checkout -B
+        _make_proc("Already up to date.\n"),              # pull
+        _make_proc("Applied stash\n"),                    # stash pop
+    ]
+    response = client.post(
+        "/api/git/checkout",
+        headers={"X-API-Key": "test-secret-key"},
+        json={"branch": "feature-x", "mode": "stash"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
     assert "引き継ぎ" in data["note"]
 
 @patch("app.main._git")
@@ -308,12 +328,12 @@ def test_git_checkout_invalid_mode(mock_git):
     assert response.status_code == 400
 
 @patch("app.main._git")
-def test_git_checkout_untracked_only_succeeds(mock_git):
-    """未追跡ファイル（??）だけの場合は checkout が通る"""
+def test_git_checkout_clean_no_stash(mock_git):
+    """変更なし（is_clean=True）の場合は stash なしで直接 checkout できる"""
     mock_git.side_effect = [
-        _make_proc("?? new_note.md\n"),             # status（??のみ）
-        _make_proc("Switched to branch 'feature-x'\n"),
-        _make_proc("Already up to date.\n"),
+        _make_proc(""),                                   # status --short（変更なし）
+        _make_proc("Switched to branch 'feature-x'\n"),  # checkout -B
+        _make_proc("Already up to date.\n"),              # pull
     ]
     response = client.post(
         "/api/git/checkout",
