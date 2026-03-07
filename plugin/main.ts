@@ -1,4 +1,185 @@
-import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, SuggestModal, requestUrl } from 'obsidian';
+import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, SuggestModal, requestUrl, moment } from 'obsidian';
+
+// ─── i18n ────────────────────────────────────────────────
+import { moment } from 'obsidian';
+const STRINGS = {
+    en: {
+        cmdConnect: "Connect server / Fetch status",
+        cmdRefresh: "Refresh status",
+        cmdForceSync: "Github Sync: Force Sync",
+        cmdGitPush: "Git: Push",
+        cmdGitPull: "Git: Pull",
+        cmdGitCommit: "Git: Commit",
+        cmdGitCheckout: "Git: Checkout branch",
+        connectFirst: "Please connect to the server first",
+        commitMessageTitle: "Commit message",
+        commitMessagePlaceholder: "Enter commit message...",
+        btnCommit: "📝 Commit",
+        btnCancel: "Cancel",
+        commitEmpty: "Please enter a commit message",
+        strCurrentBranch: "Current branch: 🌿 ",
+        strSelectBranch: " | Select branch to checkout...",
+        strCurrent: " (Current)",
+        checkoutModalTitle: "Uncommitted changes on checkout",
+        checkoutModalDesc1: "Uncommitted changes exist on branch 🌿 ",
+        strChangedFiles: "Changed files (",
+        strCountSuffix: " files)",
+        optStash: "📦 Stash and carry over",
+        optStashDesc: "Stash changes temporarily and checkout",
+        optCommitPush: "📤 Commit & Push and checkout",
+        optCommitPushDesc: "Commit current changes and push to remote",
+        optDiscard: "🗑️ Discard and checkout",
+        optDiscardDesc: "Discard all uncommitted changes and checkout (irreversible)",
+        msgConnected: "✅ Connected to server",
+        msgConnFailed: "❌ Connection failed: ",
+        msgForceSyncing: "🔄 Force syncing...",
+        msgSyncDone: "✅ Sync completed",
+        msgSyncFailed: "❌ Sync failed: ",
+        msgCheckingOut: "🔀 Checking out ",
+        msgCheckedOut: "✅ Checked out ",
+        msgCommitting: "📝 Committing changes...",
+        msgCommitted: "✅ Committed: ",
+        msgCommitFailed: "❌ Commit failed: ",
+        msgPushing: "⬆️ Pushing...",
+        msgPushDone: "✅ Push completed",
+        msgPushFailed: "❌ Push failed: ",
+        msgPulling: "⬇️ Pulling...",
+        msgPullDone: "✅ Pull completed",
+        msgPullFailed: "❌ Pull failed: ",
+        msgSettingsSaved: "✅ Settings saved",
+        msgSettingsFailed: "❌ Failed to save settings: ",
+        secServerConn: "🔌 Server Connection",
+        lblServerUrl: "Server URL",
+        descServerUrl: "URL of the sync server",
+        lblApiKey: "API Key",
+        descApiKey: "Authentication key for the server",
+        lblConnStatus: "Connection",
+        valConnected: "✅ Connected",
+        valNotConnected: "Not connected",
+        btnConnectLoad: "Connect & Load",
+        boxStarting: "⏳ Starting server...",
+        boxPhase: "Phase: ",
+        boxReconnecting: "Reconnecting automatically in 3 seconds",
+        boxStartupLog: "🪵 Startup log (",
+        secSyncStatus: "📊 Sync Status",
+        lblLastSync: "Last sync: ",
+        valNotExecuted: "Not executed yet",
+        lblMessage: "Message: ",
+        lblVaultReady: "Vault: ",
+        valReady: "✅ Ready",
+        valNotReady: "❌ Not ready",
+        warnAuthMissing: "⚠️ Obsidian auth missing",
+        warnAuthDesc: "Run setup-obsidian-auth.sh to set OBSIDIAN_AUTH_TOKEN.",
+        lblRefresh: "Refresh status",
+        descRefresh: "Fetch latest server status and update display",
+        btnRefresh: "🔄 Refresh",
+        lblForceSync: "Force Github Sync",
+        descForceSync: "Execute ob sync on the server immediately",
+        secSyncSettings: "⚙️ Sync Settings",
+        lblAutoSync: "Auto-sync interval (min)",
+        descAutoSync: "Frequency of server running ob sync",
+        secGitOps: "🌿 Git Operations",
+        valClean: "✅ Clean",
+        lblFilesChanged: " files changed",
+        lblCheckout: "Checkout branch",
+        descCheckout: "Auto git pull will run after checkout",
+        lblCommitPush: "Commit & Push",
+        btnPush: "⬆️ Push",
+        btnPull: "⬇️ Pull"
+    },
+    ja: {
+        cmdConnect: "サーバーに接続 / ステータス取得",
+        cmdRefresh: "ステータス更新",
+        cmdForceSync: "Github Sync: 強制同期",
+        cmdGitPush: "Git: Push",
+        cmdGitPull: "Git: Pull",
+        cmdGitCommit: "Git: コミット",
+        cmdGitCheckout: "Git: ブランチ切り替え",
+        connectFirst: "先にサーバーに接続してください",
+        commitMessageTitle: "コミットメッセージ",
+        commitMessagePlaceholder: "コミットメッセージを入力...",
+        btnCommit: "📝 コミット",
+        btnCancel: "キャンセル",
+        commitEmpty: "コミットメッセージを入力してください",
+        strCurrentBranch: "現在のブランチ: 🌿 ",
+        strSelectBranch: " | 切り替えるブランチを選択...",
+        strCurrent: " (現在)",
+        checkoutModalTitle: "ブランチ切り替え時の未コミット変更",
+        checkoutModalDesc1: "現在のブランチ 🌿 ",
+        strChangedFiles: "変更ファイル (",
+        strCountSuffix: " 件)",
+        optStash: "📦 Stash して引き継ぐ",
+        optStashDesc: "変更を一時的に退避(stash)してから切り替えます",
+        optCommitPush: "📤 Commit & Push して切り替える",
+        optCommitPushDesc: "現在の変更をコミットしてリモートに保存します",
+        optDiscard: "🗑️ 破棄して切り替える",
+        optDiscardDesc: "未コミットの変更をすべて破棄しクリーンな状態にします（※元に戻せません）",
+        msgConnected: "✅ サーバーに接続しました",
+        msgConnFailed: "❌ 接続失敗: ",
+        msgForceSyncing: "🔄 強制同期中...",
+        msgSyncDone: "✅ 同期が完了しました",
+        msgSyncFailed: "❌ 同期失敗: ",
+        msgCheckingOut: "🔀 切り替え中: ",
+        msgCheckedOut: "✅ 切り替えました: ",
+        msgCommitting: "📝 変更をコミット中...",
+        msgCommitted: "✅ コミットしました: ",
+        msgCommitFailed: "❌ コミット失敗: ",
+        msgPushing: "⬆️ Push中...",
+        msgPushDone: "✅ Push 完了",
+        msgPushFailed: "❌ Push 失敗: ",
+        msgPulling: "⬇️ Pull中...",
+        msgPullDone: "✅ Pull 完了",
+        msgPullFailed: "❌ Pull 失敗: ",
+        msgSettingsSaved: "✅ 設定を保存しました",
+        msgSettingsFailed: "❌ 設定保存失敗: ",
+        secServerConn: "🔌 サーバー接続",
+        lblServerUrl: "Server URL",
+        descServerUrl: "同期サーバーの URL",
+        lblApiKey: "API Key",
+        descApiKey: "サーバーの認証キー",
+        lblConnStatus: "接続",
+        valConnected: "✅ 接続済み",
+        valNotConnected: "未接続",
+        btnConnectLoad: "Connect & Load",
+        boxStarting: "⏳ サーバー起動中...",
+        boxPhase: "フェーズ: ",
+        boxReconnecting: "3 秒後に自動で再接続します",
+        boxStartupLog: "🪵 起動ログ (",
+        secSyncStatus: "📊 同期ステータス",
+        lblLastSync: "最終同期: ",
+        valNotExecuted: "まだ実行されていません",
+        lblMessage: "メッセージ: ",
+        lblVaultReady: "Vault: ",
+        valReady: "✅ 準備完了",
+        valNotReady: "❌ 未準備",
+        warnAuthMissing: "⚠️ Obsidian 認証未設定",
+        warnAuthDesc: "setup-obsidian-auth.sh を実行して OBSIDIAN_AUTH_TOKEN を登録してください。",
+        lblRefresh: "ステータス更新",
+        descRefresh: "サーバーの最新状態を取得して表示を更新します",
+        btnRefresh: "🔄 更新",
+        lblForceSync: "Github Sync 強制実行",
+        descForceSync: "今すぐサーバーで ob sync を実行します",
+        secSyncSettings: "⚙️ Sync 設定",
+        lblAutoSync: "自動同期の間隔（分）",
+        descAutoSync: "サーバーが ob sync を実行する頻度",
+        secGitOps: "🌿 Git 操作",
+        valClean: "✅ 変更なし（クリーン）",
+        lblFilesChanged: " ファイルに変更あり",
+        lblCheckout: "ブランチ切り替え",
+        descCheckout: "切り替え後は自動で git pull が実行されます",
+        lblCommitPush: "コミット & Push",
+        btnPush: "⬆️ Push",
+        btnPull: "⬇️ Pull"
+    }
+};
+
+function t(key: keyof typeof STRINGS.en): string {
+    const lang = moment.locale() === 'ja' ? 'ja' : 'en';
+    return STRINGS[lang]?.[key] || STRINGS.en[key];
+}
+// ─────────────────────────────────────────────────────────
+
+
 
 // ─── 型定義 ──────────────────────────────────────────────
 
@@ -63,37 +244,37 @@ export default class SyncBridgePlugin extends Plugin {
 
         this.addCommand({
             id: 'connect-server',
-            name: 'サーバーに接続 / ステータス取得',
+            name: t('cmdConnect'),
             callback: () => this.settingTab?.fetchAll(),
         });
 
         this.addCommand({
             id: 'refresh-status',
-            name: 'ステータス更新',
+            name: t('cmdRefresh'),
             callback: () => this.settingTab?.refreshStatus(),
         });
 
         this.addCommand({
             id: 'force-sync',
-            name: 'Github Sync: 強制同期',
+            name: t('cmdForceSync'),
             callback: () => this.settingTab?.forceSync(),
         });
 
         this.addCommand({
             id: 'git-push',
-            name: 'Git: Push',
+            name: t('cmdGitPush'),
             callback: () => this.settingTab?.pushChanges(),
         });
 
         this.addCommand({
             id: 'git-pull',
-            name: 'Git: Pull',
+            name: t('cmdGitPull'),
             callback: () => this.settingTab?.pullChanges(),
         });
 
         this.addCommand({
             id: 'git-commit',
-            name: 'Git: コミット',
+            name: t('cmdGitCommit'),
             callback: () => {
                 new CommitMessageModal(this.app, async (message) => {
                     if (!this.settingTab) return;
@@ -105,11 +286,11 @@ export default class SyncBridgePlugin extends Plugin {
 
         this.addCommand({
             id: 'git-checkout',
-            name: 'Git: ブランチ切り替え',
+            name: t('cmdGitCheckout'),
             callback: async () => {
                 const tab = this.settingTab;
                 if (!tab?.gitBranches) {
-                    new Notice('先にサーバーに接続してください');
+                    new Notice(t('connectFirst'));
                     return;
                 }
                 new BranchSuggestModal(this.app, tab.gitBranches.branches, tab.gitStatus?.branch ?? '不明', async (branch) => {
@@ -147,9 +328,9 @@ class CommitMessageModal extends Modal {
         contentEl.createEl('h3', { text: 'Git コミット' });
 
         new Setting(contentEl)
-            .setName('コミットメッセージ')
+            .setName(t('commitMessageTitle'))
             .addText(text => text
-                .setPlaceholder('コミットメッセージを入力...')
+                .setPlaceholder(t('commitMessagePlaceholder'))
                 .onChange(v => { this.input = v; })
                 .inputEl.addEventListener('keydown', (e) => {
                     if (e.key === 'Enter') this.submit();
@@ -157,17 +338,17 @@ class CommitMessageModal extends Modal {
 
         new Setting(contentEl)
             .addButton(btn => btn
-                .setButtonText('📝 コミット')
+                .setButtonText(t('btnCommit'))
                 .setCta()
                 .onClick(() => this.submit()))
             .addButton(btn => btn
-                .setButtonText('キャンセル')
+                .setButtonText(t('btnCancel'))
                 .onClick(() => this.close()));
     }
 
     private submit() {
         if (!this.input.trim()) {
-            new Notice('コミットメッセージを入力してください');
+            new Notice(t('commitEmpty'));
             return;
         }
         this.close();
@@ -190,7 +371,7 @@ class BranchSuggestModal extends SuggestModal<string> {
         this.branches = branches;
         this.currentBranch = currentBranch;
         this.onChoose = onChoose;
-        this.setPlaceholder(`現在のブランチ: 🌿 ${currentBranch} | 切り替えるブランチを選択...`);
+        this.setPlaceholder(`${t('strCurrentBranch')}${currentBranch}${t('strSelectBranch')}`);
     }
 
     getSuggestions(query: string): string[] {
@@ -199,7 +380,7 @@ class BranchSuggestModal extends SuggestModal<string> {
 
     renderSuggestion(branch: string, el: HTMLElement) {
         if (branch === this.currentBranch) {
-            el.createEl('div', { text: `🌿 ${branch} (現在)` });
+            el.createEl('div', { text: `🌿 ${branch}${t('strCurrent')}` });
             el.style.opacity = '0.5';
         } else {
             el.createEl('div', { text: `🌿 ${branch}` });
@@ -242,7 +423,7 @@ class CheckoutModeModal extends Modal {
         // 変更ファイル一覧（折りたたみ）
         if (this.changedFiles.length > 0) {
             const details = contentEl.createEl('details');
-            details.createEl('summary', { text: `変更ファイル (${this.changedFiles.length} 件)` });
+            details.createEl('summary', { text: `${t('strChangedFiles')}${this.changedFiles.length}${t('strCountSuffix')}` });
             const ul = details.createEl('ul', { cls: 'git-changed-files' });
             this.changedFiles.forEach(f => ul.createEl('li', { text: f }));
         }
@@ -260,7 +441,7 @@ class CheckoutModeModal extends Modal {
         // ── 3択ボタン ─────────────────────────────────────
 
         new Setting(contentEl)
-            .setName('📦 Stash して引き継ぐ')
+            .setName(t('optStash'))
             .setDesc('変更を一時保存し、新ブランチに持ち込む')
             .addButton(btn => btn
                 .setButtonText('Stash')
@@ -284,7 +465,7 @@ class CheckoutModeModal extends Modal {
 
         new Setting(contentEl)
             .addButton(btn => btn
-                .setButtonText('キャンセル')
+                .setButtonText(t('btnCancel'))
                 .onClick(() => this.close()));
     }
 
@@ -388,7 +569,7 @@ class SyncSettingTab extends PluginSettingTab {
             // 接続成功 → 初期化待ち状態を解除
             this.stopRetry();
             this.isInitializing = false;
-            if (!silent) new Notice('✅ サーバーに接続しました');
+            if (!silent) new Notice(t('msgConnected'));
         } catch (e: any) {
             if (e.isInitializing) {
                 this.isInitializing = true;
@@ -396,7 +577,7 @@ class SyncSettingTab extends PluginSettingTab {
                 this.initLog = e.log;
                 this.scheduleRetry();
             } else {
-                if (!silent) new Notice(`❌ 接続失敗: ${e.message}`);
+                if (!silent) new Notice(`${t('msgConnFailed')}${e.message}`);
                 // エラー時は状態をクリア
                 this.syncStatus = null;
                 this.gitStatus = null;
@@ -436,13 +617,13 @@ class SyncSettingTab extends PluginSettingTab {
             const hasDirty = !status.is_clean;
 
             const doCheckout = async (mode: string, commitMessage?: string) => {
-                new Notice(`🔀 ${branch} に切り替え中...`);
+                new Notice(`${t('msgCheckingOut')}${branch}...`);
                 const result = await this.apiPost<{ branch: string; note: string }>(
                     '/api/git/checkout',
                     { branch, mode, commit_message: commitMessage ?? '' }
                 );
                 const noteText = result.note ? ` (${result.note})` : '';
-                new Notice(`✅ ${branch} に切り替えました${noteText}`);
+                new Notice(`${t('msgCheckedOut')}${branch}${noteText}`);
                 await this.refreshStatus();
                 // ブランチ切り替え後は強制同期も実行してiPhone等にすぐ反映させる
                 await this.forceSync();
@@ -471,7 +652,7 @@ class SyncSettingTab extends PluginSettingTab {
 
     async commitChanges() {
         if (!this.commitMessage.trim()) {
-            new Notice('コミットメッセージを入力してください');
+            new Notice(t('commitEmpty'));
             return;
         }
         try {
@@ -480,7 +661,7 @@ class SyncSettingTab extends PluginSettingTab {
             new Notice('✅ コミットしました');
             this.commitMessage = '';
         } catch (e) {
-            new Notice(`❌ コミット失敗: ${e.message}`);
+            new Notice(`${t('msgCommitFailed')}${e.message}`);
         }
         await this.refreshStatus();
     }
@@ -491,7 +672,7 @@ class SyncSettingTab extends PluginSettingTab {
             const result = await this.apiPost<{ branch: string }>('/api/git/push');
             new Notice(`✅ ${result.branch} を Push しました`);
         } catch (e) {
-            new Notice(`❌ Push 失敗: ${e.message}`);
+            new Notice(`${t('msgPushFailed')}${e.message}`);
         }
         await this.refreshStatus();
     }
@@ -502,18 +683,18 @@ class SyncSettingTab extends PluginSettingTab {
             const result = await this.apiPost<{ branch: string; output: string }>('/api/git/pull');
             new Notice(`✅ Pull 完了 (${result.branch})`);
         } catch (e) {
-            new Notice(`❌ Pull 失敗: ${e.message}`);
+            new Notice(`${t('msgPullFailed')}${e.message}`);
         }
         await this.refreshStatus();
     }
 
     async forceSync() {
         try {
-            new Notice('🔄 強制同期中...');
+            new Notice(t('msgForceSyncing'));
             await this.apiPost('/api/sync/force');
-            new Notice('✅ 同期が完了しました');
+            new Notice(t('msgSyncDone'));
         } catch (e) {
-            new Notice(`❌ 同期失敗: ${e.message}`);
+            new Notice(`${t('msgSyncFailed')}${e.message}`);
         }
         await this.refreshStatus();
     }
@@ -522,9 +703,9 @@ class SyncSettingTab extends PluginSettingTab {
         if (!this.remoteSettings) return;
         try {
             await this.apiPost('/api/settings', this.remoteSettings);
-            new Notice('✅ 設定を保存しました');
+            new Notice(t('msgSettingsSaved'));
         } catch (e) {
-            new Notice(`❌ 設定保存失敗: ${e.message}`);
+            new Notice(`${t('msgSettingsFailed')}${e.message}`);
         }
     }
 
@@ -535,11 +716,11 @@ class SyncSettingTab extends PluginSettingTab {
         containerEl.empty();
 
         // ── 接続設定 ──────────────────────────────────────
-        containerEl.createEl('h2', { text: '🔌 サーバー接続' });
+        containerEl.createEl('h2', { text: t('secServerConn') });
 
         new Setting(containerEl)
-            .setName('Server URL')
-            .setDesc('同期サーバーの URL')
+            .setName(t('lblServerUrl'))
+            .setDesc(t('descServerUrl'))
             .addText(text => text
                 .setPlaceholder('http://localhost:8000')
                 .setValue(this.plugin.settings.serverUrl)
@@ -549,8 +730,8 @@ class SyncSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('API Key')
-            .setDesc('サーバーの認証キー')
+            .setName(t('lblApiKey'))
+            .setDesc(t('descApiKey'))
             .addText(text => text
                 .setPlaceholder('default-secret-key')
                 .setValue(this.plugin.settings.apiKey)
@@ -560,27 +741,27 @@ class SyncSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('接続')
-            .setDesc(this.remoteSettings ? `✅ 接続済み (現在のブランチ: 🌿 ${this.gitStatus?.branch ?? '不明'})` : '未接続')
+            .setName(t('lblConnStatus'))
+            .setDesc(this.remoteSettings ? `${t('valConnected')} (${t('strCurrentBranch')}${this.gitStatus?.branch ?? 'unknown'})` : t('valNotConnected'))
             .addButton(btn => btn
-                .setButtonText('Connect & Load')
+                .setButtonText(t('btnConnectLoad'))
                 .setCta()
                 .onClick(() => this.fetchAll()));
 
         // ─── コールドスタート待機中 ────────────────────────────
         if (this.isInitializing) {
             const box = containerEl.createEl('div', { cls: 'sync-initializing-box' });
-            box.createEl('p', { text: '⏳ サーバー起動中...' });
-            box.createEl('p', { text: `フェーズ: ${this.initPhase}`, cls: 'sync-status-message' });
-            box.createEl('p', { text: '3 秒後に自動で再接続します', cls: 'sync-status-message' });
+            box.createEl('p', { text: t('boxStarting') });
+            box.createEl('p', { text: `${t('boxPhase')}${this.initPhase}`, cls: 'sync-status-message' });
+            box.createEl('p', { text: t('boxReconnecting'), cls: 'sync-status-message' });
             if (this.initLog.length > 0) {
                 const details = box.createEl('details');
-                details.createEl('summary', { text: `🪵 起動ログ (${this.initLog.length} 件)` });
+                details.createEl('summary', { text: `${t('boxStartupLog')}${this.initLog.length}${t('strCountSuffix')}` });
                 details.createEl('pre', { cls: 'sync-startup-log', text: this.initLog.join('\n') });
             }
             new Setting(containerEl)
                 .addButton(btn => btn
-                    .setButtonText('キャンセル')
+                    .setButtonText(t('btnCancel'))
                     .onClick(() => {
                         this.stopRetry();
                         this.isInitializing = false;
@@ -592,7 +773,7 @@ class SyncSettingTab extends PluginSettingTab {
         if (!this.remoteSettings) return;
 
         // ── Sync ステータス ────────────────────────────────
-        containerEl.createEl('h2', { text: '📊 同期ステータス' });
+        containerEl.createEl('h2', { text: t('secSyncStatus') });
 
         if (this.syncStatus) {
             const s = this.syncStatus;
@@ -601,52 +782,52 @@ class SyncSettingTab extends PluginSettingTab {
                 : s.last_sync_result === 'skipped' ? '⏭️' : '—';
             const lastAt = s.last_sync_at
                 ? new Date(s.last_sync_at).toLocaleString('ja-JP')
-                : 'まだ実行されていません';
+                : t('valNotExecuted');
 
             const info = containerEl.createEl('div', { cls: 'sync-status-info' });
-            info.createEl('p', { text: `${resultEmoji} 最終同期: ${lastAt}` });
+            info.createEl('p', { text: `${resultEmoji} ${t('lblLastSync')}${lastAt}` });
             if (s.last_sync_message) {
-                info.createEl('p', { text: `メッセージ: ${s.last_sync_message}`, cls: 'sync-status-message' });
+                info.createEl('p', { text: `${t('lblMessage')}${s.last_sync_message}`, cls: 'sync-status-message' });
             }
-            info.createEl('p', { text: `Vault: ${s.is_vault_ready ? '✅ 準備完了' : '❌ 未準備'}` });
+            info.createEl('p', { text: `${t('lblVaultReady')} ${s.is_vault_ready ? t('valReady') : t('valNotReady')}` });
 
             // Obsidian 認証状態
             if (!s.ob_auth_configured) {
                 const warn = info.createEl('div', { cls: 'sync-status-warning' });
-                warn.createEl('p', { text: '⚠️ Obsidian 認証未設定' });
-                warn.createEl('p', { text: 'setup-obsidian-auth.sh を実行して OBSIDIAN_AUTH_TOKEN を登録してください。', cls: 'sync-status-message' });
+                warn.createEl('p', { text: t('warnAuthMissing') });
+                warn.createEl('p', { text: t('warnAuthDesc'), cls: 'sync-status-message' });
             }
 
             // スタートアップログ（折りたたみ）
             if (s.startup_log && s.startup_log.length > 0) {
                 const details = info.createEl('details');
-                details.createEl('summary', { text: `🪵 サーバー起動ログ (${s.startup_log.length} 件)` });
+                details.createEl('summary', { text: `${t('boxStartupLog')}${s.startup_log.length}${t('strCountSuffix')}` });
                 const pre = details.createEl('pre', { cls: 'sync-startup-log' });
                 pre.setText(s.startup_log.join('\n'));
             }
         }
 
         new Setting(containerEl)
-            .setName('ステータス更新')
-            .setDesc('サーバーの最新状態を取得して表示を更新します')
+            .setName(t('cmdRefresh'))
+            .setDesc(t('descRefresh'))
             .addButton(btn => btn
-                .setButtonText('🔄 更新')
+                .setButtonText(t('btnRefresh'))
                 .onClick(() => this.refreshStatus()));
 
         new Setting(containerEl)
-            .setName('Github Sync 強制実行')
-            .setDesc('今すぐサーバーで ob sync を実行します')
+            .setName(t('lblForceSync'))
+            .setDesc(t('descForceSync'))
             .addButton(btn => btn
                 .setButtonText('Force Sync')
                 .setWarning()
                 .onClick(() => this.forceSync()));
 
         // ── Github Sync 設定 ────────────────────────────
-        containerEl.createEl('h2', { text: '⚙️ Sync 設定' });
+        containerEl.createEl('h2', { text: t('secSyncSettings') });
 
         new Setting(containerEl)
-            .setName('自動同期の間隔（分）')
-            .setDesc('サーバーが ob sync を実行する頻度')
+            .setName(t('lblAutoSync'))
+            .setDesc(t('descAutoSync'))
             .addText(text => text
                 .setValue(this.remoteSettings!.auto_sync_interval.toString())
                 .onChange(async (value) => {
@@ -658,7 +839,7 @@ class SyncSettingTab extends PluginSettingTab {
                 }));
 
         // ── Git 操作 ──────────────────────────────────────
-        containerEl.createEl('h2', { text: '🌿 Git 操作' });
+        containerEl.createEl('h2', { text: t('secGitOps') });
 
         if (this.gitStatus && this.gitBranches) {
             const gs = this.gitStatus;
@@ -666,11 +847,11 @@ class SyncSettingTab extends PluginSettingTab {
 
             // ブランチ情報
             const branchInfo = containerEl.createEl('div', { cls: 'git-branch-info' });
-            branchInfo.createEl('p', { text: `現在のブランチ: 🌿 ${gs.branch}` });
+            branchInfo.createEl('p', { text: `${t('strCurrentBranch')}${gs.branch}` });
             branchInfo.createEl('p', {
                 text: gs.is_clean
-                    ? '✅ 変更なし（クリーン）'
-                    : `📝 ${gs.changed_files.length} ファイルに変更あり`,
+                    ? t('valClean')
+                    : `📝 ${gs.changed_files.length}${t('lblFilesChanged')}`,
             });
 
             // ブランチ切り替え
@@ -683,8 +864,8 @@ class SyncSettingTab extends PluginSettingTab {
                 : gb.branches;
 
             new Setting(containerEl)
-                .setName('ブランチ切り替え')
-                .setDesc('切り替え後は自動で git pull が実行されます')
+                .setName(t('lblCheckout'))
+                .setDesc(t('descCheckout'))
                 .addDropdown(drop => {
                     filteredBranches.forEach(b => drop.addOption(b, b));
                     drop.setValue(gs.branch);
@@ -696,12 +877,12 @@ class SyncSettingTab extends PluginSettingTab {
                 });
 
             // コミット
-            containerEl.createEl('h3', { text: 'コミット & Push' });
+            containerEl.createEl('h3', { text: t('lblCommitPush') });
 
             new Setting(containerEl)
-                .setName('コミットメッセージ')
+                .setName(t('commitMessageTitle'))
                 .addText(text => text
-                    .setPlaceholder('コミットメッセージを入力...')
+                    .setPlaceholder(t('commitMessagePlaceholder'))
                     .setValue(this.commitMessage)
                     .onChange((value) => { this.commitMessage = value; }));
 
@@ -711,16 +892,16 @@ class SyncSettingTab extends PluginSettingTab {
                     .setButtonText('📝 Commit')
                     .onClick(() => this.commitChanges()))
                 .addButton(btn => btn
-                    .setButtonText('⬆️ Push')
+                    .setButtonText(t('btnPush'))
                     .onClick(() => this.pushChanges()))
                 .addButton(btn => btn
-                    .setButtonText('⬇️ Pull')
+                    .setButtonText(t('btnPull'))
                     .onClick(() => this.pullChanges()));
 
             // 変更ファイル一覧（変更がある場合のみ）
             if (!gs.is_clean) {
                 const changedEl = containerEl.createEl('details');
-                changedEl.createEl('summary', { text: `変更ファイル (${gs.changed_files.length})` });
+                changedEl.createEl('summary', { text: `${t('strChangedFiles')}${gs.changed_files.length})` });
                 const ul = changedEl.createEl('ul', { cls: 'git-changed-files' });
                 gs.changed_files.forEach(f => ul.createEl('li', { text: f }));
             }

@@ -14,7 +14,7 @@ app = FastAPI(title="Obsidian Sync Server API")
 
 # 起動完了フラグ — False の間は初期化中なので 503 を返す
 _startup_complete: bool = False
-_startup_phase: str = "初期化中..."
+_startup_phase: str = "Initializing..."
 
 @app.middleware("http")
 async def startup_guard(request: Request, call_next):
@@ -31,7 +31,7 @@ async def startup_guard(request: Request, call_next):
                 content={
                     "status": "initializing",
                     "phase": _startup_phase,
-                    "message": f"サーバー起動中: {_startup_phase}",
+                    "message": f"Server starting: {_startup_phase}",
                     "startup_log": _startup_log[-10:],
                 }
             )
