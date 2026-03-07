@@ -44,13 +44,11 @@ def test_get_settings_default():
     response = client.get("/api/settings", headers={"X-API-Key": "test-secret-key"})
     assert response.status_code == 200
     data = response.json()
-    assert data["sync_obsidian_config"] == False
     assert data["auto_sync_interval"] == 60
     assert data["github_branch_patterns"] == []
 
 def test_update_settings():
     new_settings = {
-        "sync_obsidian_config": True,
         "auto_sync_interval": 30,
         "github_branch_patterns": ["main", "dev"]
     }
@@ -61,12 +59,10 @@ def test_update_settings():
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["sync_obsidian_config"] == True
     assert data["auto_sync_interval"] == 30
 
     response_get = client.get("/api/settings", headers={"X-API-Key": "test-secret-key"})
     data_get = response_get.json()
-    assert data_get["sync_obsidian_config"] == True
     assert data_get["auto_sync_interval"] == 30
 
 def test_force_sync_without_api_key():
@@ -96,32 +92,9 @@ def test_force_sync_execution(mock_run):
     assert "Mocked Output" in data["output"]
 
     calls = mock_run.call_args_list
-    assert len(calls) == 2
-    assert calls[0][0][0][1:] == ["sync-config", "--configs", ""]
-    assert calls[1][0][0][1:] == ["sync"]
+    assert len(calls) == 1
+    assert calls[0][0][0][1:] == ["sync"]
 
-@patch("subprocess.run")
-def test_force_sync_execution_with_obsidian_sync(mock_run):
-    mock_result = MagicMock()
-    mock_result.stdout = "Mocked Output"
-    mock_run.return_value = mock_result
-
-    new_settings = {
-        "sync_obsidian_config": True,
-        "auto_sync_interval": 60,
-        "github_branch_patterns": ["main"]
-    }
-    client.post("/api/settings", headers={"X-API-Key": "test-secret-key"}, json=new_settings)
-
-    response = client.post("/api/sync/force", headers={"X-API-Key": "test-secret-key"})
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "success"
-
-    calls = mock_run.call_args_list
-    assert len(calls) == 2
-    assert calls[0][0][0][1:] == ["sync-config", "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"]
-    assert calls[1][0][0][1:] == ["sync"]
 
 # =========================================================
 # Git API: 認証チェック

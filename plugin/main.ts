@@ -7,8 +7,7 @@ interface SyncPluginSettings {
     apiKey: string;
 }
 
-interface RemoteSettings {
-    sync_obsidian_config: boolean;
+export interface RemoteSettings {
     auto_sync_interval: number;
     github_branch_patterns: string[];
 }
@@ -626,16 +625,6 @@ class SyncSettingTab extends PluginSettingTab {
 
         // ── Obsidian Sync 設定 ────────────────────────────
         containerEl.createEl('h2', { text: '⚙️ Sync 設定' });
-
-        new Setting(containerEl)
-            .setName('.obsidian フォルダを同期する')
-            .setDesc('プラグイン・テーマ設定もサーバーと同期します')
-            .addToggle(toggle => toggle
-                .setValue(this.remoteSettings!.sync_obsidian_config)
-                .onChange(async (value) => {
-                    this.remoteSettings!.sync_obsidian_config = value;
-                    await this.updateRemoteSettings();
-                }));
 
         new Setting(containerEl)
             .setName('自動同期の間隔（分）')

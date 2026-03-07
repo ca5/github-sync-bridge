@@ -69,7 +69,6 @@ OB_CMD = os.getenv("OB_CMD", os.path.join(_PROJECT_ROOT, "node_modules/.bin/ob")
 _GIT_SSH_KEY = os.getenv("GIT_SSH_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa"))
 
 class Settings(BaseModel):
-    sync_obsidian_config: bool
     auto_sync_interval: int
     github_branch_patterns: List[str]
 
@@ -77,11 +76,13 @@ def load_settings() -> Settings:
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r") as f:
             data = json.load(f)
+            # 古い設定ファイルから sync_obsidian_config を除外してロード
+            if "sync_obsidian_config" in data:
+                del data["sync_obsidian_config"]
             return Settings(**data)
     else:
         # Default settings
         return Settings(
-            sync_obsidian_config=False,
             auto_sync_interval=60,
             github_branch_patterns=[]
         )
@@ -198,23 +199,16 @@ def force_sync(x_api_key: Optional[str] = Header(None)):
         raise HTTPException(status_code=500, detail=f"Sync aborted: {reason}")
 
     # 同期実行ロジック (obsidian-headless版)
-    print(f"Executing force sync... sync_obsidian_config: {settings.sync_obsidian_config}")
+    print(f"Executing force sync...")
 
-    # 1. 構成設定の更新
-    if settings.sync_obsidian_config:
-        config_command = [OB_CMD, "sync-config", "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"]
-    else:
-        config_command = [OB_CMD, "sync-config", "--configs", ""]
-
-    # 2. 同期の実行
+    # 同期の実行
     sync_command = [OB_CMD, "sync"]
 
     try:
         with _ob_sync_lock:
             clear_sync_lock()
-            config_result = subprocess.run(config_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
             sync_result = subprocess.run(sync_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
-        output = config_result.stdout + "\n" + sync_result.stdout
+        output = sync_result.stdout
         return {"status": "success", "message": "Force sync triggered successfully.", "output": output}
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"Sync failed: {_trim_error(e.stderr)}")
@@ -433,7 +427,7 @@ def sync_worker():
         settings = load_settings()
         interval = settings.auto_sync_interval
 
-        print(f"Background worker running... Interval: {interval} min, sync_obsidian_config: {settings.sync_obsidian_config}")
+        print(f"Background worker running... Interval: {interval} min")
 
         # 安全チェック: Vaultが空の場合はsyncをスキップ
         safe, reason = check_vault_safety()
@@ -466,17 +460,10 @@ def sync_worker():
         with _ob_sync_lock:
             clear_sync_lock()
 
-            # 1. 構成設定の更新
-            if settings.sync_obsidian_config:
-                config_command = [OB_CMD, "sync-config", "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"]
-            else:
-                config_command = [OB_CMD, "sync-config", "--configs", ""]
-
-            # 2. 同期の実行
+            # 同期の実行
             sync_command = [OB_CMD, "sync"]
 
             try:
-                subprocess.run(config_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
                 subprocess.run(sync_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
                 print("Background sync successful.")
                 _sync_status.update({
