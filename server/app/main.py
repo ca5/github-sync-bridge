@@ -432,6 +432,19 @@ def git_pull(x_api_key: Optional[str] = Header(None)):
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"git pull failed: {e.stderr}")
 
+@app.post("/api/git/reset")
+def git_reset(x_api_key: Optional[str] = Header(None)):
+    """Discard all local changes and reset to match the remote branch"""
+    verify_api_key(x_api_key)
+    try:
+        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+        _git(["fetch", "origin"])
+        result = _git(["reset", "--hard", f"origin/{branch}"])
+        _git(["clean", "-fd"])
+        return {"status": "success", "branch": branch, "output": result.stdout.strip()}
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"git reset failed: {e.stderr}")
+
 
 # Periodic sync worker
 def sync_worker():

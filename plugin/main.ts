@@ -54,6 +54,12 @@ const STRINGS = {
         msgPulling: "⬇️ Pulling...",
         msgPullDone: "✅ Pull completed",
         msgPullFailed: "❌ Pull failed: ",
+        cmdGitReset: "Git: Reset to remote",
+        btnReset: "⚠️ Reset to remote",
+        msgResetting: "⚠️ Resetting to remote...",
+        msgResetDone: "✅ Reset completed",
+        msgResetFailed: "❌ Reset failed: ",
+        descReset: "Discard all local changes and reset to match the remote branch (irreversible)",
         msgSettingsSaved: "✅ Settings saved",
         msgSettingsFailed: "❌ Failed to save settings: ",
         msgRefreshFailed: "❌ Failed to refresh status: ",
@@ -141,6 +147,12 @@ const STRINGS = {
         msgPulling: "⬇️ Pull中...",
         msgPullDone: "✅ Pull 完了",
         msgPullFailed: "❌ Pull 失敗: ",
+        cmdGitReset: "Git: リモートの状態にリセット",
+        btnReset: "⚠️ リセット",
+        msgResetting: "⚠️ リモートの状態にリセット中...",
+        msgResetDone: "✅ リセット完了",
+        msgResetFailed: "❌ リセット失敗: ",
+        descReset: "ローカルの全ての変更を破棄し、リモートブランチと同じクリーンな状態に戻します（元に戻せません）",
         msgSettingsSaved: "✅ 設定を保存しました",
         msgSettingsFailed: "❌ 設定保存失敗: ",
         msgRefreshFailed: "❌ ステータス更新失敗: ",
@@ -296,6 +308,12 @@ export default class SyncBridgePlugin extends Plugin {
             id: 'git-pull',
             name: t('cmdGitPull'),
             callback: () => this.settingTab?.pullChanges(),
+        });
+
+        this.addCommand({
+            id: 'git-reset',
+            name: t('cmdGitReset'),
+            callback: () => this.settingTab?.resetChanges(),
         });
 
         this.addCommand({
@@ -714,6 +732,17 @@ class SyncSettingTab extends PluginSettingTab {
         await this.refreshStatus();
     }
 
+    async resetChanges() {
+        try {
+            new Notice(t('msgResetting'));
+            const result = await this.apiPost<{ branch: string; output: string }>('/api/git/reset');
+            new Notice(`${t('msgResetDone')} (${result.branch})`);
+        } catch (e: any) {
+            new Notice(`${t('msgResetFailed')}${e.message}`);
+        }
+        await this.refreshStatus();
+    }
+
     async forceSync() {
         try {
             new Notice(t('msgForceSyncing'));
@@ -923,6 +952,18 @@ class SyncSettingTab extends PluginSettingTab {
                 .addButton(btn => btn
                     .setButtonText(t('btnPull'))
                     .onClick(() => this.pullChanges()));
+
+            if (!gs.is_clean) {
+                new Setting(containerEl)
+                    .setName(t('cmdGitReset'))
+                    .setDesc(t('descReset'))
+                    .addButton(btn => btn
+                        .setButtonText(t('btnReset'))
+                        .setWarning()
+                        .onClick(async () => {
+                            await this.resetChanges();
+                        }));
+            }
 
             // 変更ファイル一覧（変更がある場合のみ）
             if (!gs.is_clean) {
