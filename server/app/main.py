@@ -689,7 +689,9 @@ def setup_obsidian_vault() -> None:
         
         # Configure what gets synced (e.g. plugins, themes, etc.)
         config_result = subprocess.run(
-            [OB_CMD, "sync-config", "--path", VAULT_DIR, "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data"],
+            [OB_CMD, "sync-config", "--path", VAULT_DIR, 
+             "--configs", "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,community-plugin,community-plugin-data",
+             "--file-types", "image,audio,video,pdf,unsupported"],
             capture_output=True, text=True, check=True,
             cwd=VAULT_DIR
         )
