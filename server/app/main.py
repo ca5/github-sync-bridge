@@ -64,9 +64,18 @@ API_KEY = os.getenv("API_KEY", "default-secret-key")
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 VAULT_DIR = os.getenv("VAULT_DIR", os.path.join(_PROJECT_ROOT, "vault"))
 # Absolute path to the 'ob' command (resolved directly to avoid PATH dependency)
-OB_CMD = os.getenv("OB_CMD", os.path.join(_PROJECT_ROOT, "node_modules/.bin/ob"))
-# Path to the SSH private key (may be updated by setup_ssh_key())
-_GIT_SSH_KEY = os.getenv("GIT_SSH_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa"))
+_DEFAULT_OB_CMD = os.path.join(_PROJECT_ROOT, "node_modules/.bin/ob")
+OB_CMD = os.getenv("OB_CMD", _DEFAULT_OB_CMD)
+
+# If OB_CMD doesn't exist, try to find 'ob' in PATH (important for Cloud Run global install)
+if not os.path.exists(OB_CMD):
+    import shutil
+    which_ob = shutil.which("ob")
+    if which_ob:
+        OB_CMD = which_ob
+    else:
+        # Fallback to just "ob" and hope it's in PATH at runtime
+        OB_CMD = "ob"
 
 class Settings(BaseModel):
     auto_sync_interval: int
@@ -74,12 +83,19 @@ class Settings(BaseModel):
 
 def load_settings() -> Settings:
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
-            data = json.load(f)
-            # Load settings, excluding old 'sync_obsidian_config'
-            if "sync_obsidian_config" in data:
-                del data["sync_obsidian_config"]
-            return Settings(**data)
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                content = f.read().strip()
+                if not content:
+                    raise ValueError("Empty config file")
+                data = json.loads(content)
+                # Load settings, excluding old 'sync_obsidian_config'
+                if "sync_obsidian_config" in data:
+                    del data["sync_obsidian_config"]
+                return Settings(**data)
+        except (json.JSONDecodeError, ValueError, Exception) as e:
+            print(f"Warning: Failed to load {CONFIG_FILE} ({e}). Using defaults.")
+            return Settings(auto_sync_interval=60, github_branch_patterns=[])
     else:
         # Default settings
         return Settings(
@@ -671,3 +687,6 @@ def setup_obsidian_vault() -> None:
         _log("Obsidian Sync may not work. Check OBSIDIAN_VAULT_ID and OBSIDIAN_AUTH_TOKEN.")
     except FileNotFoundError:
         _log(f"ob command not found at: {OB_CMD}")
+
+# Path to the SSH private key (may be updated by setup_ssh_key())
+_GIT_SSH_KEY = os.getenv("GIT_SSH_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa"))
