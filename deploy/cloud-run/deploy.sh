@@ -92,7 +92,7 @@ gcloud run deploy "$SERVICE_NAME" \
     --allow-unauthenticated \
     --min-instances=0 \
     --max-instances=1 \
-    --memory=512Mi \
+    --memory=1024Mi \
     --cpu=1 \
     --port=8080 \
     --set-env-vars="VAULT_DIR=/vault" \
