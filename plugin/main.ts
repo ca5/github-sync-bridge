@@ -8,12 +8,12 @@ const STRINGS = {
         cmdForceSync: "Github Sync: Force Sync",
         cmdGitPush: "Git: Push",
         cmdGitPull: "Git: Pull",
-        cmdGitCommit: "Git: Commit",
+        cmdGitCommit: "Git: Commit & Push",
         cmdGitCheckout: "Git: Checkout branch",
         connectFirst: "Please connect to the server first",
         commitMessageTitle: "Commit message",
         commitMessagePlaceholder: "Enter commit message...",
-        btnCommit: "📝 Commit",
+        btnCommit: "📝 Commit & Push",
         btnCancel: "Cancel",
         commitEmpty: "Please enter a commit message",
         strCurrentBranch: "Current branch: 🌿 ",
@@ -110,12 +110,12 @@ const STRINGS = {
         cmdForceSync: "Github Sync: 強制同期",
         cmdGitPush: "Git: Push",
         cmdGitPull: "Git: Pull",
-        cmdGitCommit: "Git: コミット",
+        cmdGitCommit: "Git: コミット & Push",
         cmdGitCheckout: "Git: ブランチ切り替え",
         connectFirst: "先にサーバーに接続してください",
         commitMessageTitle: "コミットメッセージ",
         commitMessagePlaceholder: "コミットメッセージを入力...",
-        btnCommit: "📝 コミット",
+        btnCommit: "📝 コミット & Push",
         btnCancel: "キャンセル",
         commitEmpty: "コミットメッセージを入力してください",
         strCurrentBranch: "現在のブランチ: 🌿 ",
@@ -704,8 +704,13 @@ class SyncSettingTab extends PluginSettingTab {
             await this.apiPost('/api/git/commit', { message: this.commitMessage });
             new Notice(t('msgCommitted'));
             this.commitMessage = '';
+
+            // Automatically push after successful commit
+            new Notice(t('msgPushing'));
+            const result = await this.apiPost<{ branch: string }>('/api/git/push');
+            new Notice(`${t('msgPushDone')} (${result.branch})`);
         } catch (e: any) {
-            new Notice(`${t('msgCommitFailed')}${e.message}`);
+            new Notice(`${t('msgCommitFailed')}${e.message}`); // or push failed
         }
         await this.refreshStatus();
     }
@@ -946,9 +951,6 @@ class SyncSettingTab extends PluginSettingTab {
                 .addButton(btn => btn
                     .setButtonText(t('btnCommit'))
                     .onClick(() => this.commitChanges()))
-                .addButton(btn => btn
-                    .setButtonText(t('btnPush'))
-                    .onClick(() => this.pushChanges()))
                 .addButton(btn => btn
                     .setButtonText(t('btnPull'))
                     .onClick(() => this.pullChanges()));
