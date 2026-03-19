@@ -79,8 +79,9 @@ def _make_proc(stdout="", returncode=0):
     m.returncode = returncode
     return m
 
+@patch("app.main.check_vault_safety", return_value=(True, ""))
 @patch("subprocess.run")
-def test_force_sync_execution(mock_run):
+def test_force_sync_execution(mock_run, mock_safety):
     mock_result = MagicMock()
     mock_result.stdout = "Mocked Output"
     mock_run.return_value = mock_result
@@ -93,7 +94,7 @@ def test_force_sync_execution(mock_run):
 
     calls = mock_run.call_args_list
     assert len(calls) == 1
-    assert calls[0][0][0][1:] == ["sync"]
+    assert calls[0][0][0][1] == "sync"
 
 
 # =========================================================

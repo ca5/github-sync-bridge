@@ -284,6 +284,52 @@ def _git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
         env=_git_env()
     )
 
+def _restore_mtime_to_commit(ref: str = "HEAD") -> None:
+    """
+    Restore the modification time (mtime) of changed files in the vault
+    to the timestamp of their last git commit.
+    This prevents Obsidian Sync from incorrectly assuming the cloud version
+    is newer just because a git pull/checkout touched the file.
+    Instead of checking all files, it checks files changed in the recent operation.
+    We get all files and their commit times efficiently.
+    """
+    try:
+        # Get all files and their last commit timestamp in a single call using git log
+        # --name-only and --format="%ct" allows parsing.
+        # But an easier way for all files is `git ls-files -z` and then batching,
+        # or getting the git log of the whole tree.
+        # Actually, the most robust way to get all file times efficiently in Git:
+        # git log --pretty=format:%ct --name-status
+
+        # Let's just update the mtime of files that differ between HEAD@{1} and HEAD
+        # If this is after a checkout/pull/reset, HEAD@{1} is the previous state.
+        try:
+            changed_files_raw = _git(["diff", "--name-only", "-z", "HEAD@{1}", "HEAD"]).stdout
+        except subprocess.CalledProcessError:
+            # If HEAD@{1} doesn't exist (e.g., first commit), fallback to all files
+            changed_files_raw = _git(["ls-files", "-z"]).stdout
+
+        if not changed_files_raw:
+            return
+
+        changed_files = [f for f in changed_files_raw.split('\0') if f]
+
+        for file in changed_files:
+            file_path = os.path.join(VAULT_DIR, file)
+            if not os.path.exists(file_path):
+                continue
+
+            # Get the unix timestamp of the last commit for this specific file
+            # Since we only do this for changed files, the number of subprocesses is small.
+            commit_time_str = _git(["log", "-1", "--format=%ct", "--", file]).stdout.strip()
+            if commit_time_str:
+                commit_time = int(commit_time_str)
+                os.utime(file_path, (commit_time, commit_time))
+
+        _log(f"Restored mtimes for {len(changed_files)} changed files to their last commit time.")
+    except Exception as e:
+        _log(f"Warning: Failed to restore mtime to commit: {e}")
+
 class CommitRequest(BaseModel):
     message: str
 
@@ -387,6 +433,8 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
             except subprocess.CalledProcessError:
                 note = "変更を stash しました（'git stash pop' で後で復元できます）"
 
+        _restore_mtime_to_commit()
+
         return {
             "status": "success",
             "branch": req.branch,
@@ -428,6 +476,7 @@ def git_pull(x_api_key: Optional[str] = Header(None)):
     try:
         branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
         result = _git(["pull", "origin", branch])
+        _restore_mtime_to_commit()
         return {"status": "success", "branch": branch, "output": result.stdout.strip()}
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"git pull failed: {e.stderr}")
@@ -441,6 +490,7 @@ def git_reset(x_api_key: Optional[str] = Header(None)):
         _git(["fetch", "origin"])
         result = _git(["reset", "--hard", f"origin/{branch}"])
         _git(["clean", "-fd"])
+        _restore_mtime_to_commit()
         return {"status": "success", "branch": branch, "output": result.stdout.strip()}
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"git reset failed: {e.stderr}")
