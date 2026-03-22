@@ -1,7 +1,7 @@
 {
   "id": "github-sync-bridge",
   "name": "Github Sync Bridge",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "minAppVersion": "0.15.0",
   "description": "Control your remote sync server settings (like syncing the .obsidian folder).",
   "author": "Ca5",
