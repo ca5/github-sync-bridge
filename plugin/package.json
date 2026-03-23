@@ -1,6 +1,6 @@
 {
   "name": "github-sync-bridge",
-  "version": "0.0.7",
+  "version": "0.0.9",
   "description": "Obsidian plugin to control remote sync server settings",
   "main": "main.js",
   "scripts": {
