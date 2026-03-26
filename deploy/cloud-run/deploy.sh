@@ -20,6 +20,7 @@ SERVICE_NAME="${SERVICE_NAME:-obsidian-sync-server}"
 REPO="${REPO:-obsidian-sync}"                        # Artifact Registry リポジトリ名
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-}"               # 例: git@github.com:ca5/obsidian.git
 OBSIDIAN_VAULT_ID="${OBSIDIAN_VAULT_ID:-}"           # ob sync-list-remote で確認した Vault ID
+GCS_BUCKET_NAME="${GCS_BUCKET_NAME:-}"               # スケールゼロ対策のバックアップ用 GCS バケット名
 
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${SERVICE_NAME}"
 
@@ -33,6 +34,13 @@ fi
 if [[ -z "$GITHUB_REPO_URL" ]]; then
     echo "❌ GITHUB_REPO_URL が未設定です"
     echo "   例: GITHUB_REPO_URL=git@github.com:ca5/obsidian.git bash deploy/cloud-run/deploy.sh"
+    exit 1
+fi
+
+if [[ -z "$GCS_BUCKET_NAME" ]]; then
+    echo "❌ GCS_BUCKET_NAME が未設定です"
+    echo "   Cloud Run のゼロスケール退避用に GCS バケット名を指定してください"
+    echo "   例: GCS_BUCKET_NAME=my-obsidian-backup-bucket bash deploy/cloud-run/deploy.sh"
     exit 1
 fi
 
@@ -100,6 +108,7 @@ gcloud run deploy "$SERVICE_NAME" \
     --set-env-vars="CONFIG_FILE=/app/server/data/config.json" \
     --set-env-vars="GITHUB_REPO_URL=${GITHUB_REPO_URL}" \
     --set-env-vars="OBSIDIAN_VAULT_ID=${OBSIDIAN_VAULT_ID}" \
+    --set-env-vars="GCS_BUCKET_NAME=${GCS_BUCKET_NAME}" \
     --update-secrets="API_KEY=obsidian-sync-api-key:latest" \
     --update-secrets="GIT_SSH_KEY=obsidian-sync-git-ssh-key:latest" \
     --update-secrets="OBSIDIAN_AUTH_TOKEN=obsidian-sync-auth-token:latest" \
