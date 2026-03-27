@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import threading
 import time
+import tarfile
 from datetime import datetime, timezone
 
 app = FastAPI(title="Obsidian Sync Server API")
@@ -423,7 +424,7 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
         # Checkout branch (auto track if remote only)
         _git(["checkout", "-B", req.branch, f"origin/{req.branch}"])
         # git pull
-        pull_result = _git(["pull", "origin", req.branch])
+        pull_result = _git(["pull", "--no-rebase", "--no-edit", "origin", req.branch])
 
         # stash pop（mode=stash For）
         if note == "__stash_pop__":
@@ -475,7 +476,7 @@ def git_pull(x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
     try:
         branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-        result = _git(["pull", "origin", branch])
+        result = _git(["pull", "--no-rebase", "--no-edit", "origin", branch])
         _restore_mtime_to_commit()
         return {"status": "success", "branch": branch, "output": result.stdout.strip()}
     except subprocess.CalledProcessError as e:
@@ -577,9 +578,74 @@ def sync_worker():
         # Wait for next interval
         time.sleep(interval * 60)
 
+def restore_from_gcs():
+    """Restores the vault and configuration from GCS on container startup."""
+    bucket_name = os.getenv("GCS_BUCKET_NAME", "")
+    if not bucket_name:
+        return
+    try:
+        from google.cloud import storage
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob("backup.tar.gz")
+        if not blob.exists():
+            _log("No backup found in GCS.")
+            return
+
+        _log(f"Downloading backup from GCS bucket: {bucket_name}...")
+        backup_path = "/tmp/backup.tar.gz"
+        blob.download_to_filename(backup_path)
+
+        _log("Extracting backup...")
+        with tarfile.open(backup_path, "r:gz") as tar:
+            # We tar'ed them using absolute paths from root or relative to root
+            tar.extractall(path="/")
+
+        os.remove(backup_path)
+        _log("Restore complete.")
+    except Exception as e:
+        _log(f"Warning: Failed to restore from GCS: {e}")
+
+def backup_to_gcs():
+    """Backs up the vault and configuration to GCS on container shutdown."""
+    bucket_name = os.getenv("GCS_BUCKET_NAME", "")
+    if not bucket_name:
+        _log("GCS_BUCKET_NAME not set. Skipping backup.")
+        return
+    try:
+        from google.cloud import storage
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob("backup.tar.gz")
+
+        backup_path = "/tmp/backup.tar.gz"
+        _log(f"Creating backup archive of vault and config at {backup_path}...")
+
+        config_dir = os.path.dirname(CONFIG_FILE)
+
+        with tarfile.open(backup_path, "w:gz") as tar:
+            if os.path.exists(VAULT_DIR):
+                # Archive VAULT_DIR keeping its path hierarchy
+                tar.add(VAULT_DIR, arcname=VAULT_DIR.lstrip('/'))
+            if os.path.exists(config_dir):
+                # Archive config_dir keeping its path hierarchy
+                tar.add(config_dir, arcname=config_dir.lstrip('/'))
+
+        _log(f"Uploading backup to GCS bucket: {bucket_name}...")
+        blob.upload_from_filename(backup_path)
+
+        os.remove(backup_path)
+        _log("Backup to GCS complete.")
+    except Exception as e:
+        _log(f"Error: Failed to backup to GCS: {e}")
+
 @app.on_event("startup")
 def startup_event():
     global _startup_complete, _startup_phase
+
+    _startup_phase = "Restoring state from GCS"
+    _log("▶ Phase 0/5: Restore state from GCS")
+    restore_from_gcs()
 
     _startup_phase = "Configuring SSH key"
     _log("▶ Phase 1/5: Setup SSH key")
@@ -614,6 +680,11 @@ def startup_event():
 
     _startup_complete = True
     _log("✅ Server startup complete")
+
+@app.on_event("shutdown")
+def shutdown_event():
+    _log("Server shutting down. Initiating backup to GCS...")
+    backup_to_gcs()
 
 
 def setup_ssh_key() -> None:
@@ -658,6 +729,8 @@ def init_vault_from_github() -> None:
     git_email = os.getenv("GIT_USER_EMAIL", "obsidian-sync-bot@server")
     subprocess.run(["git", "config", "--global", "user.name", git_name], check=False)
     subprocess.run(["git", "config", "--global", "user.email", git_email], check=False)
+    # Set pull.rebase false globally to avoid divergence errors
+    subprocess.run(["git", "config", "--global", "pull.rebase", "false"], check=False)
 
     git_dir = os.path.join(VAULT_DIR, ".git")
 
@@ -666,7 +739,7 @@ def init_vault_from_github() -> None:
         _log(f"Vault already initialized at {VAULT_DIR}. Running git pull...")
         try:
             result = subprocess.run(
-                ["git", "pull"],
+                ["git", "pull", "--no-rebase", "--no-edit"],
                 capture_output=True, text=True, check=True,
                 cwd=VAULT_DIR, env=_git_env()
             )
