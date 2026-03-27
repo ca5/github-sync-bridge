@@ -13,9 +13,6 @@ from datetime import datetime, timezone
 
 app = FastAPI(title="Obsidian Sync Server API")
 
-GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
-BACKUP_ARCHIVE_PATH = "/tmp/obsidian_backup.tar.gz"
-
 # Startup completion flag - Returns 503 while False (initializing)
 _startup_complete: bool = False
 _startup_phase: str = "Initializing..."
@@ -581,28 +578,89 @@ def sync_worker():
         # Wait for next interval
         time.sleep(interval * 60)
 
+def restore_from_gcs():
+    """Restores the vault and configuration from GCS on container startup."""
+    bucket_name = os.getenv("GCS_BUCKET_NAME", "")
+    if not bucket_name:
+        return
+    try:
+        from google.cloud import storage
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob("backup.tar.gz")
+        if not blob.exists():
+            _log("No backup found in GCS.")
+            return
+
+        _log(f"Downloading backup from GCS bucket: {bucket_name}...")
+        backup_path = "/tmp/backup.tar.gz"
+        blob.download_to_filename(backup_path)
+
+        _log("Extracting backup...")
+        with tarfile.open(backup_path, "r:gz") as tar:
+            # We tar'ed them using absolute paths from root or relative to root
+            tar.extractall(path="/")
+
+        os.remove(backup_path)
+        _log("Restore complete.")
+    except Exception as e:
+        _log(f"Warning: Failed to restore from GCS: {e}")
+
+def backup_to_gcs():
+    """Backs up the vault and configuration to GCS on container shutdown."""
+    bucket_name = os.getenv("GCS_BUCKET_NAME", "")
+    if not bucket_name:
+        _log("GCS_BUCKET_NAME not set. Skipping backup.")
+        return
+    try:
+        from google.cloud import storage
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob("backup.tar.gz")
+
+        backup_path = "/tmp/backup.tar.gz"
+        _log(f"Creating backup archive of vault and config at {backup_path}...")
+
+        config_dir = os.path.dirname(CONFIG_FILE)
+
+        with tarfile.open(backup_path, "w:gz") as tar:
+            if os.path.exists(VAULT_DIR):
+                # Archive VAULT_DIR keeping its path hierarchy
+                tar.add(VAULT_DIR, arcname=VAULT_DIR.lstrip('/'))
+            if os.path.exists(config_dir):
+                # Archive config_dir keeping its path hierarchy
+                tar.add(config_dir, arcname=config_dir.lstrip('/'))
+
+        _log(f"Uploading backup to GCS bucket: {bucket_name}...")
+        blob.upload_from_filename(backup_path)
+
+        os.remove(backup_path)
+        _log("Backup to GCS complete.")
+    except Exception as e:
+        _log(f"Error: Failed to backup to GCS: {e}")
+
 @app.on_event("startup")
 def startup_event():
     global _startup_complete, _startup_phase
 
-    _startup_phase = "Restoring from GCS"
-    _log("▶ Phase 1/6: Restore state from GCS (if configured)")
+    _startup_phase = "Restoring state from GCS"
+    _log("▶ Phase 0/5: Restore state from GCS")
     restore_from_gcs()
 
     _startup_phase = "Configuring SSH key"
-    _log("▶ Phase 2/6: Setup SSH key")
+    _log("▶ Phase 1/5: Setup SSH key")
     setup_ssh_key()
 
     _startup_phase = "Configuring Obsidian auth token"
-    _log("▶ Phase 3/6: Setup Obsidian Auth Token")
+    _log("▶ Phase 2/5: Setup Obsidian Auth Token")
     setup_obsidian_auth()
 
     _startup_phase = "Fetching Vault from GitHub"
-    _log("▶ Phase 4/6: Clone or Update Vault from GitHub")
+    _log("▶ Phase 3/5: Clone or Update Vault from GitHub")
     init_vault_from_github()
 
     _startup_phase = "Setting up Obsidian Sync"
-    _log("▶ Phase 5/6: ob sync-setup")
+    _log("▶ Phase 4/5: ob sync-setup")
     setup_obsidian_vault()
 
     # ob sync-setup Clear lock again as sync-setup might create one
@@ -616,7 +674,7 @@ def startup_event():
     clear_sync_lock()
 
     _startup_phase = "Complete"
-    _log("▶ Phase 6/6: Launch background worker")
+    _log("▶ Phase 5/5: Launch background worker")
     thread = threading.Thread(target=sync_worker, daemon=True)
     thread.start()
 
@@ -627,73 +685,6 @@ def startup_event():
 def shutdown_event():
     _log("Server shutting down. Initiating backup to GCS...")
     backup_to_gcs()
-
-
-def restore_from_gcs() -> None:
-    """
-    Restore the vault and data directory from a GCS bucket archive if available.
-    """
-    if not GCS_BUCKET_NAME:
-        _log("GCS_BUCKET_NAME not set. Skipping restore from GCS.")
-        return
-
-    _log(f"Attempting to restore from GCS bucket: {GCS_BUCKET_NAME} ...")
-    try:
-        from google.cloud import storage
-        client = storage.Client()
-        bucket = client.bucket(GCS_BUCKET_NAME)
-        blob = bucket.blob("obsidian_backup.tar.gz")
-
-        if blob.exists():
-            _log("Backup archive found in GCS. Downloading...")
-            blob.download_to_filename(BACKUP_ARCHIVE_PATH)
-
-            _log("Extracting backup archive...")
-            with tarfile.open(BACKUP_ARCHIVE_PATH, "r:gz") as tar:
-                # Extract to root since we use relative paths from root when archiving
-                # By providing path='/', we place files precisely at their original absolute paths if packed relatively
-                tar.extractall(path="/")
-            _log("Restore from GCS complete.")
-
-            # Clean up lock files that might have been backed up in the archive
-            clear_sync_lock()
-        else:
-            _log("No backup archive found in GCS. Starting fresh.")
-    except ImportError:
-        _log("google-cloud-storage not installed. Cannot restore from GCS.")
-    except Exception as e:
-        _log(f"Failed to restore from GCS: {e}")
-
-def backup_to_gcs() -> None:
-    """
-    Backup the vault and data directory to a GCS bucket archive.
-    """
-    if not GCS_BUCKET_NAME:
-        _log("GCS_BUCKET_NAME not set. Skipping backup to GCS.")
-        return
-
-    _log(f"Starting backup to GCS bucket: {GCS_BUCKET_NAME} ...")
-    try:
-        with tarfile.open(BACKUP_ARCHIVE_PATH, "w:gz") as tar:
-            if os.path.exists(VAULT_DIR):
-                # Use lstrip('/') to make paths relative to extract to root later
-                tar.add(VAULT_DIR, arcname=VAULT_DIR.lstrip('/'))
-
-            config_dir = os.path.dirname(os.path.abspath(CONFIG_FILE))
-            if os.path.exists(config_dir):
-                tar.add(config_dir, arcname=config_dir.lstrip('/'))
-
-        from google.cloud import storage
-        client = storage.Client()
-        bucket = client.bucket(GCS_BUCKET_NAME)
-        blob = bucket.blob("obsidian_backup.tar.gz")
-        _log("Uploading backup archive to GCS...")
-        blob.upload_from_filename(BACKUP_ARCHIVE_PATH)
-        _log("Backup to GCS complete.")
-    except ImportError:
-        _log("google-cloud-storage not installed. Cannot backup to GCS.")
-    except Exception as e:
-        _log(f"Failed to backup to GCS: {e}")
 
 
 def setup_ssh_key() -> None:
@@ -738,6 +729,7 @@ def init_vault_from_github() -> None:
     git_email = os.getenv("GIT_USER_EMAIL", "obsidian-sync-bot@server")
     subprocess.run(["git", "config", "--global", "user.name", git_name], check=False)
     subprocess.run(["git", "config", "--global", "user.email", git_email], check=False)
+    # Set pull.rebase false globally to avoid divergence errors
     subprocess.run(["git", "config", "--global", "pull.rebase", "false"], check=False)
 
     git_dir = os.path.join(VAULT_DIR, ".git")
