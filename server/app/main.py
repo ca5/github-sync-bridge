@@ -423,7 +423,7 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
         # Checkout branch (auto track if remote only)
         _git(["checkout", "-B", req.branch, f"origin/{req.branch}"])
         # git pull
-        pull_result = _git(["pull", "origin", req.branch])
+        pull_result = _git(["pull", "--no-rebase", "--no-edit", "origin", req.branch])
 
         # stash pop（mode=stash For）
         if note == "__stash_pop__":
@@ -475,7 +475,7 @@ def git_pull(x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
     try:
         branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-        result = _git(["pull", "origin", branch])
+        result = _git(["pull", "--no-rebase", "--no-edit", "origin", branch])
         _restore_mtime_to_commit()
         return {"status": "success", "branch": branch, "output": result.stdout.strip()}
     except subprocess.CalledProcessError as e:
@@ -658,6 +658,7 @@ def init_vault_from_github() -> None:
     git_email = os.getenv("GIT_USER_EMAIL", "obsidian-sync-bot@server")
     subprocess.run(["git", "config", "--global", "user.name", git_name], check=False)
     subprocess.run(["git", "config", "--global", "user.email", git_email], check=False)
+    subprocess.run(["git", "config", "--global", "pull.rebase", "false"], check=False)
 
     git_dir = os.path.join(VAULT_DIR, ".git")
 
@@ -666,7 +667,7 @@ def init_vault_from_github() -> None:
         _log(f"Vault already initialized at {VAULT_DIR}. Running git pull...")
         try:
             result = subprocess.run(
-                ["git", "pull"],
+                ["git", "pull", "--no-rebase", "--no-edit"],
                 capture_output=True, text=True, check=True,
                 cwd=VAULT_DIR, env=_git_env()
             )
