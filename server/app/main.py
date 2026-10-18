@@ -42,6 +42,21 @@ async def startup_guard(request: Request, call_next):
                     "startup_log": _startup_log[-10:],
                 }
             )
+
+    if request.url.path.startswith("/admin"):
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Basic "):
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"}, headers={"WWW-Authenticate": "Basic"})
+        try:
+            import base64
+            encoded = auth_header.split(" ")[1]
+            decoded = base64.b64decode(encoded).decode("utf-8")
+            username, password = decoded.split(":", 1)
+            if username != ADMIN_USERNAME or password != ADMIN_PASSWORD:
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"}, headers={"WWW-Authenticate": "Basic"})
+        except Exception:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"}, headers={"WWW-Authenticate": "Basic"})
+
     return await call_next(request)
 
 # Manage sync status in memory
@@ -72,6 +87,8 @@ def _log(msg: str) -> None:
 
 CONFIG_FILE = os.getenv("CONFIG_FILE", "./data/config.json")
 LOG_FILE = os.getenv("LOG_FILE", "./data/server.log")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
 API_KEY = os.getenv("API_KEY", "default-secret-key")
 # Vault directory where ob sync-setup was executed
 # Default: project_root/vault (already setup with --path ./vault)
@@ -543,7 +560,6 @@ def git_reset(x_api_key: Optional[str] = Header(None)):
             raise HTTPException(status_code=500, detail=f"git reset failed: {e.stderr}")
 
 
-    # Periodic sync worker
     finally:
         _ob_sync_lock.release()
 def sync_worker():

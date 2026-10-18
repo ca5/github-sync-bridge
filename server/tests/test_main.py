@@ -480,3 +480,28 @@ def test_clear_sync_lock(mock_rmtree, mock_isdir):
     mock_isdir.return_value = False
     clear_sync_lock()
     mock_rmtree.assert_not_called()
+
+
+# =========================================================
+# Web Admin UI Basic Authentication Tests
+# =========================================================
+
+def test_admin_auth_required():
+    """/admin requires Basic Auth"""
+    response = client.get("/admin/")
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate") == "Basic"
+
+def test_admin_auth_invalid():
+    """/admin rejects invalid Basic Auth"""
+    import base64
+    invalid_auth = base64.b64encode(b"wrong:pass").decode("utf-8")
+    response = client.get("/admin/", headers={"Authorization": f"Basic {invalid_auth}"})
+    assert response.status_code == 401
+
+def test_admin_auth_valid():
+    """/admin accepts valid Basic Auth (admin:admin)"""
+    import base64
+    valid_auth = base64.b64encode(b"admin:admin").decode("utf-8")
+    response = client.get("/admin/", headers={"Authorization": f"Basic {valid_auth}"})
+    assert response.status_code == 200
