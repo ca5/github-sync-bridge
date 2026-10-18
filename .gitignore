@@ -8,3 +8,4 @@ __pycache__/
 vault/
 server/data/
 .obsidian/
+google-cloud-sdk/
