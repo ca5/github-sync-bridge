@@ -7,11 +7,11 @@ WORKDIR /app
 RUN npm install -g pnpm
 
 # 依存関係ファイルをコピー（pluginのpackage.jsonも必要: workspaceの解決）
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 COPY plugin/package.json ./plugin/
 
 # 本番依存のみインストール（plugin devDeps を除く）
-RUN pnpm install --frozen-lockfile --prod
+RUN pnpm install --frozen-lockfile --prod --ignore-scripts
 
 # ── ステージ2: アプリケーション本体 ────────────────────────────────────
 FROM python:3.11-slim
