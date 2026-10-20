@@ -36,7 +36,7 @@
 - [x] `POST /api/git/push` — リモートへ push（SSH 認証）
 - [x] `POST /api/git/pull` — リモートから pull
 - [x] SSH 認証設定（`GIT_SSH_COMMAND` 環境変数経由）
-- [ ] ob sync 実行中の git 操作をブロックするロック制御
+- [x] ob sync 実行中の git 操作をブロックするロック制御
 
 ---
 
@@ -70,29 +70,29 @@
 
 > 仕様 §Web管理画面 に記載。プラグインと同じ API を使用。
 
-- [ ] 管理画面の HTML/CSS/JS 実装（`server/static/` に配置）
-- [ ] 現在の Obsidian Sync ステータス表示
-- [ ] git ステータス（ブランチ・未コミット変更数）表示
-- [ ] ブランチ切り替え UI
-- [ ] Commit & Push 操作 UI
-- [ ] Force Sync ボタン
+- [x] 管理画面の HTML/CSS/JS 実装（`server/static/` に配置）
+- [x] 現在の Obsidian Sync ステータス表示
+- [x] git ステータス（ブランチ・未コミット変更数）表示
+- [x] ブランチ切り替え UI
+- [x] Commit & Push 操作 UI
+- [x] Force Sync ボタン
 
 ---
 
 ## ❌ インフラ・運用
 
-- [ ] Docker / docker-compose 動作確認
-- [ ] `server/data/` の Volume マウント確認（コンテナ再起動後も設定が消えないこと）
-- [ ] `OBSIDIAN_AUTH_TOKEN` 環境変数対応（非対話環境での ob login 代替）
-- [ ] ログの永続化
+- [x] Docker / docker-compose 動作確認
+- [x] `server/data/` の Volume マウント確認（コンテナ再起動後も設定が消えないこと）
+- [x] `OBSIDIAN_AUTH_TOKEN` 環境変数対応（非対話環境での ob login 代替）
+- [x] ログの永続化
 
 ---
 
 ## ❌ テスト追加
 
-- [ ] `GET /api/sync/status` のテスト
-- [ ] `check_vault_safety` / `clear_sync_lock` のユニットテスト
-- [ ] Git API エンドポイントのテスト（subprocess をモック）
+- [x] `GET /api/sync/status` のテスト
+- [x] `check_vault_safety` / `clear_sync_lock` のユニットテスト
+- [x] Git API エンドポイントのテスト（subprocess をモック）
 
 ---
 

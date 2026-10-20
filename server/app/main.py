@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
@@ -11,6 +12,12 @@ import time
 from datetime import datetime, timezone
 
 app = FastAPI(title="Obsidian Sync Server API")
+
+import os
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "../static")
+if os.path.exists(STATIC_DIR):
+    app.mount("/admin", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+
 
 # Startup completion flag - Returns 503 while False (initializing)
 _startup_complete: bool = False
@@ -35,6 +42,21 @@ async def startup_guard(request: Request, call_next):
                     "startup_log": _startup_log[-10:],
                 }
             )
+
+    if request.url.path.startswith("/admin"):
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Basic "):
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"}, headers={"WWW-Authenticate": "Basic"})
+        try:
+            import base64
+            encoded = auth_header.split(" ")[1]
+            decoded = base64.b64decode(encoded).decode("utf-8")
+            username, password = decoded.split(":", 1)
+            if username != ADMIN_USERNAME or password != ADMIN_PASSWORD:
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"}, headers={"WWW-Authenticate": "Basic"})
+        except Exception:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"}, headers={"WWW-Authenticate": "Basic"})
+
     return await call_next(request)
 
 # Manage sync status in memory
@@ -49,15 +71,24 @@ _sync_status = {
 _startup_log: list[str] = []
 
 def _log(msg: str) -> None:
-    """Record startup messages to both stdout and memory"""
-    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    """Record startup messages to both stdout, memory and log file"""
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line)
     _startup_log.append(line)
     if len(_startup_log) > 50:
         _startup_log.pop(0)
+    try:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as e:
+        print(f"Failed to write log to {LOG_FILE}: {e}")
 
 CONFIG_FILE = os.getenv("CONFIG_FILE", "./data/config.json")
+LOG_FILE = os.getenv("LOG_FILE", "./data/server.log")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
 API_KEY = os.getenv("API_KEY", "default-secret-key")
 # Vault directory where ob sync-setup was executed
 # Default: project_root/vault (already setup with --path ./vault)
@@ -346,39 +377,49 @@ class CheckoutRequest(BaseModel):
 def git_status(x_api_key: Optional[str] = Header(None)):
     """Return current branch and changed files"""
     verify_api_key(x_api_key)
+    if not _ob_sync_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
-        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-        status = _git(["status", "--short"]).stdout.strip()
-        changed_files = [line for line in status.splitlines() if line]
-        return {
-            "branch": branch,
-            "changed_files": changed_files,
-            "is_clean": len(changed_files) == 0,
-        }
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"git status failed: {e.stderr}")
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="git is not installed.")
+        try:
+            branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+            status = _git(["status", "--short"]).stdout.strip()
+            changed_files = [line for line in status.splitlines() if line]
+            return {
+                "branch": branch,
+                "changed_files": changed_files,
+                "is_clean": len(changed_files) == 0,
+            }
+        except subprocess.CalledProcessError as e:
+            raise HTTPException(status_code=500, detail=f"git status failed: {e.stderr}")
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail="git is not installed.")
 
+    finally:
+        _ob_sync_lock.release()
 @app.get("/api/git/branches")
 def git_branches(x_api_key: Optional[str] = Header(None)):
     """ローカル + Return list of remote branches"""
     verify_api_key(x_api_key)
+    if not _ob_sync_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
-        current = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-        local_raw = _git(["branch", "--format=%(refname:short)"]).stdout.strip()
-        remote_raw = _git(["branch", "-r", "--format=%(refname:short)"]).stdout.strip()
-        local = [b for b in local_raw.splitlines() if b]
-        remote = [b.replace("origin/", "") for b in remote_raw.splitlines()
-                  if b and "HEAD" not in b]
-        all_branches = sorted(set(local + remote))
-        return {
-            "current": current,
-            "branches": all_branches,
-        }
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"git branch failed: {e.stderr}")
+        try:
+            current = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+            local_raw = _git(["branch", "--format=%(refname:short)"]).stdout.strip()
+            remote_raw = _git(["branch", "-r", "--format=%(refname:short)"]).stdout.strip()
+            local = [b for b in local_raw.splitlines() if b]
+            remote = [b.replace("origin/", "") for b in remote_raw.splitlines()
+                      if b and "HEAD" not in b]
+            all_branches = sorted(set(local + remote))
+            return {
+                "current": current,
+                "branches": all_branches,
+            }
+        except subprocess.CalledProcessError as e:
+            raise HTTPException(status_code=500, detail=f"git branch failed: {e.stderr}")
 
+    finally:
+        _ob_sync_lock.release()
 @app.post("/api/git/checkout")
 def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
     """
@@ -387,127 +428,151 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
     未追跡ファイルも checkout をブロックする場合existsため、全変更をチェックする。
     """
     verify_api_key(x_api_key)
+    if not _ob_sync_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
-        status_lines = _git(["status", "--short"]).stdout.strip().splitlines()
-        # 全変更（追跡済み＋未追跡どちらも checkout をブロックしうる）
-        all_changes    = [line for line in status_lines if line]
-        tracked_changes = [line for line in all_changes if not line.startswith("??")]
+        try:
+            status_lines = _git(["status", "--short"]).stdout.strip().splitlines()
+            # 全変更（追跡済み＋未追跡どちらも checkout をブロックしうる）
+            all_changes    = [line for line in status_lines if line]
+            tracked_changes = [line for line in all_changes if not line.startswith("??")]
 
-        note = ""
+            note = ""
 
-        if all_changes:
-            if req.mode == "stash":
-                # --include-untracked: Stash both tracked and untracked files
-                _git(["stash", "push", "--include-untracked",
-                      "-m", f"auto-stash before checkout {req.branch}"])
-                note = "__stash_pop__"
+            if all_changes:
+                if req.mode == "stash":
+                    # --include-untracked: Stash both tracked and untracked files
+                    _git(["stash", "push", "--include-untracked",
+                          "-m", f"auto-stash before checkout {req.branch}"])
+                    note = "__stash_pop__"
 
-            elif req.mode == "commit_push":
-                # git add -A Stage including untracked files → commit → push
-                msg = req.commit_message.strip() or f"auto-commit before checkout {req.branch}"
-                _git(["add", "-A"])
-                _git(["commit", "-m", msg])
-                current_branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-                _git(["push", "origin", current_branch])
-                note = f"別ブランチ ({current_branch}) にコミット・ Push しました"
+                elif req.mode == "commit_push":
+                    # git add -A Stage including untracked files → commit → push
+                    msg = req.commit_message.strip() or f"auto-commit before checkout {req.branch}"
+                    _git(["add", "-A"])
+                    _git(["commit", "-m", msg])
+                    current_branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+                    _git(["push", "origin", current_branch])
+                    note = f"別ブランチ ({current_branch}) にコミット・ Push しました"
 
-            elif req.mode == "discard":
-                # Discard tracked changes + Delete untracked files
-                _git(["checkout", "--", "."])
-                _git(["clean", "-fd"])
-                note = "未コミットの変更を破棄しました"
+                elif req.mode == "discard":
+                    # Discard tracked changes + Delete untracked files
+                    _git(["checkout", "--", "."])
+                    _git(["clean", "-fd"])
+                    note = "未コミットの変更を破棄しました"
 
-            else:
-                raise HTTPException(status_code=400, detail=f"Unknown mode: {req.mode}")
+                else:
+                    raise HTTPException(status_code=400, detail=f"Unknown mode: {req.mode}")
 
-        # Checkout branch (auto track if remote only)
-        _git(["checkout", "-B", req.branch, f"origin/{req.branch}"])
-        # git pull
-        pull_result = _git(["pull", "origin", req.branch])
+            # Checkout branch (auto track if remote only)
+            _git(["checkout", "-B", req.branch, f"origin/{req.branch}"])
+            # git pull
+            pull_result = _git(["pull", "origin", req.branch])
 
-        # stash pop（mode=stash For）
-        if note == "__stash_pop__":
-            try:
-                _git(["stash", "pop"])
-                note = "変更を新しいブランチに引き継ぎました"
-            except subprocess.CalledProcessError:
-                note = "変更を stash しました（'git stash pop' で後で復元できます）"
+            # stash pop（mode=stash For）
+            if note == "__stash_pop__":
+                try:
+                    _git(["stash", "pop"])
+                    note = "変更を新しいブランチに引き継ぎました"
+                except subprocess.CalledProcessError:
+                    note = "変更を stash しました（'git stash pop' で後で復元できます）"
 
-        _restore_mtime_to_commit()
+            _restore_mtime_to_commit()
 
-        return {
-            "status": "success",
-            "branch": req.branch,
-            "pull_output": pull_result.stdout.strip(),
-            "note": note,
-        }
-    except HTTPException:
-        raise
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"git checkout failed: {_trim_error(e.stderr)}")
+            return {
+                "status": "success",
+                "branch": req.branch,
+                "pull_output": pull_result.stdout.strip(),
+                "note": note,
+            }
+        except HTTPException:
+            raise
+        except subprocess.CalledProcessError as e:
+            raise HTTPException(status_code=500, detail=f"git checkout failed: {_trim_error(e.stderr)}")
 
+    finally:
+        _ob_sync_lock.release()
 @app.post("/api/git/commit")
 def git_commit(req: CommitRequest, x_api_key: Optional[str] = Header(None)):
     """Stage all changes and commit with message"""
     verify_api_key(x_api_key)
+    if not _ob_sync_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
-        _git(["add", "-A"])
-        result = _git(["commit", "-m", req.message])
-        return {"status": "success", "output": result.stdout.strip()}
-    except subprocess.CalledProcessError as e:
-        detail = e.stderr.strip() or e.stdout.strip()
-        raise HTTPException(status_code=500, detail=f"git commit failed: {detail}")
+        try:
+            _git(["add", "-A"])
+            result = _git(["commit", "-m", req.message])
+            return {"status": "success", "output": result.stdout.strip()}
+        except subprocess.CalledProcessError as e:
+            detail = e.stderr.strip() or e.stdout.strip()
+            raise HTTPException(status_code=500, detail=f"git commit failed: {detail}")
 
+    finally:
+        _ob_sync_lock.release()
 @app.post("/api/git/push")
 def git_push(x_api_key: Optional[str] = Header(None)):
     """現在のブランチをリモートへ push する（SSH認証）"""
     verify_api_key(x_api_key)
+    if not _ob_sync_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
-        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-        result = _git(["push", "origin", branch])
-        return {"status": "success", "branch": branch, "output": result.stdout.strip()}
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"git push failed: {e.stderr}")
+        try:
+            branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+            result = _git(["push", "origin", branch])
+            return {"status": "success", "branch": branch, "output": result.stdout.strip()}
+        except subprocess.CalledProcessError as e:
+            raise HTTPException(status_code=500, detail=f"git push failed: {e.stderr}")
 
+    finally:
+        _ob_sync_lock.release()
 @app.post("/api/git/pull")
 def git_pull(x_api_key: Optional[str] = Header(None)):
     """Pull current branch from remote"""
     verify_api_key(x_api_key)
+    if not _ob_sync_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
-        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-        result = _git(["pull", "origin", branch])
-        _restore_mtime_to_commit()
-        return {"status": "success", "branch": branch, "output": result.stdout.strip()}
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"git pull failed: {e.stderr}")
+        try:
+            branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+            result = _git(["pull", "origin", branch])
+            _restore_mtime_to_commit()
+            return {"status": "success", "branch": branch, "output": result.stdout.strip()}
+        except subprocess.CalledProcessError as e:
+            raise HTTPException(status_code=500, detail=f"git pull failed: {e.stderr}")
 
+    finally:
+        _ob_sync_lock.release()
 @app.post("/api/git/reset")
 def git_reset(x_api_key: Optional[str] = Header(None)):
     """Discard all local changes and reset to match the remote branch"""
     verify_api_key(x_api_key)
+    if not _ob_sync_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
-        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-        _git(["fetch", "origin"])
-        result = _git(["reset", "--hard", f"origin/{branch}"])
-        _git(["clean", "-fd"])
-        _restore_mtime_to_commit()
-        return {"status": "success", "branch": branch, "output": result.stdout.strip()}
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"git reset failed: {e.stderr}")
+        try:
+            branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+            _git(["fetch", "origin"])
+            result = _git(["reset", "--hard", f"origin/{branch}"])
+            _git(["clean", "-fd"])
+            _restore_mtime_to_commit()
+            return {"status": "success", "branch": branch, "output": result.stdout.strip()}
+        except subprocess.CalledProcessError as e:
+            raise HTTPException(status_code=500, detail=f"git reset failed: {e.stderr}")
 
 
-# Periodic sync worker
+    finally:
+        _ob_sync_lock.release()
 def sync_worker():
     while True:
         settings = load_settings()
         interval = settings.auto_sync_interval
 
-        print(f"Background worker running... Interval: {interval} min")
+        _log(f"Background worker running... Interval: {interval} min")
 
         # 安全チェック: Vaultが空Forはsyncをスキップ
         safe, reason = check_vault_safety()
         if not safe:
-            print(f"Background sync skipped: {reason}")
+            _log(f"Background sync skipped: {reason}")
             _sync_status.update({
                 "last_sync_at": datetime.now(timezone.utc).isoformat(),
                 "last_sync_result": "skipped",
@@ -522,7 +587,7 @@ def sync_worker():
                 "Obsidian Auth not configured: ~/.obsidian-headless/auth_token missing."
                 "Run setup-obsidian-auth.sh to register OBSIDIAN_AUTH_TOKEN."
             )
-            print(f"Background sync skipped: {msg}")
+            _log(f"Background sync skipped: {msg}")
             _sync_status.update({
                 "last_sync_at": datetime.now(timezone.utc).isoformat(),
                 "last_sync_result": "skipped",
@@ -540,7 +605,7 @@ def sync_worker():
 
             try:
                 subprocess.run(sync_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
-                print("Background sync successful.")
+                _log("Background sync successful.")
                 _sync_status.update({
                     "last_sync_at": datetime.now(timezone.utc).isoformat(),
                     "last_sync_result": "success",
@@ -550,7 +615,7 @@ def sync_worker():
                 stderr = e.stderr or ""
                 # "Another sync instance" Transient state - clearing lock and skipping
                 if "another sync instance" in stderr.lower() or "already running" in stderr.lower():
-                    print("Background sync: another instance detected, clearing lock and retrying next interval.")
+                    _log("Background sync: another instance detected, clearing lock and retrying next interval.")
                     clear_sync_lock()
                     _sync_status.update({
                         "last_sync_at": datetime.now(timezone.utc).isoformat(),
@@ -559,7 +624,7 @@ def sync_worker():
                     })
                 else:
                     msg = _trim_error(stderr)
-                    print(f"Background sync failed: {msg}")
+                    _log(f"Background sync failed: {msg}")
                     _sync_status.update({
                         "last_sync_at": datetime.now(timezone.utc).isoformat(),
                         "last_sync_result": "failed",
@@ -567,7 +632,7 @@ def sync_worker():
                     })
             except FileNotFoundError:
                 msg = "obsidian-headless (ob) is not installed or not in PATH."
-                print(msg)
+                _log(msg)
                 _sync_status.update({
                     "last_sync_at": datetime.now(timezone.utc).isoformat(),
                     "last_sync_result": "failed",

@@ -409,3 +409,99 @@ def test_git_pull_failure(mock_git):
     response = client.post("/api/git/pull", headers={"X-API-Key": "test-secret-key"})
     assert response.status_code == 500
     assert "git pull failed" in response.json()["detail"]
+
+# =========================================================
+# Additional tests for Obsidian Sync endpoints and helpers
+# =========================================================
+
+@patch("app.main.check_vault_safety")
+def test_get_sync_status(mock_safety):
+    """Test GET /api/sync/status"""
+    from app.main import _sync_status
+    mock_safety.return_value = (True, "")
+    _sync_status["last_sync_result"] = "success"
+    _sync_status["last_sync_message"] = "test msg"
+    _sync_status["is_vault_ready"] = True
+
+    response = client.get("/api/sync/status", headers={"X-API-Key": "test-secret-key"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["last_sync_result"] == "success"
+    assert data["last_sync_message"] == "test msg"
+    assert data["is_vault_ready"] == True
+    assert "startup_log" in data
+
+@patch("app.main.os.path.exists")
+@patch("app.main.os.path.isdir")
+@patch("app.main.os.listdir")
+def test_check_vault_safety(mock_listdir, mock_isdir, mock_exists):
+    """Test check_vault_safety functionality"""
+    from app.main import check_vault_safety
+
+    # 1. Directory doesn't exist
+    mock_isdir.return_value = False
+    safe, reason = check_vault_safety()
+    assert safe == False
+    assert "does not exist" in reason
+
+    # 2. Directory exists but empty
+    mock_isdir.return_value = True
+    mock_listdir.return_value = []
+    safe, reason = check_vault_safety()
+    assert safe == False
+    assert "empty" in reason
+
+    # 3. .obsidian missing
+    mock_listdir.return_value = ["some_file.md"]
+    mock_isdir.return_value = False
+    safe, reason = check_vault_safety()
+    assert safe == False
+    pass # Not checking for .obsidian
+
+    # 4. Safe
+    mock_isdir.return_value = True
+    safe, reason = check_vault_safety()
+    assert safe == True
+    assert reason == ""
+
+@patch("app.main.os.path.isdir")
+@patch("app.main.shutil.rmtree")
+def test_clear_sync_lock(mock_rmtree, mock_isdir):
+    """Test clear_sync_lock functionality"""
+    from app.main import clear_sync_lock
+
+    # Lock exists
+    mock_isdir.return_value = True
+    clear_sync_lock()
+    mock_rmtree.assert_called_once()
+
+    # Lock doesn't exist
+    mock_rmtree.reset_mock()
+    mock_isdir.return_value = False
+    clear_sync_lock()
+    mock_rmtree.assert_not_called()
+
+
+# =========================================================
+# Web Admin UI Basic Authentication Tests
+# =========================================================
+
+def test_admin_auth_required():
+    """/admin requires Basic Auth"""
+    response = client.get("/admin/")
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate") == "Basic"
+
+def test_admin_auth_invalid():
+    """/admin rejects invalid Basic Auth"""
+    import base64
+    invalid_auth = base64.b64encode(b"wrong:pass").decode("utf-8")
+    response = client.get("/admin/", headers={"Authorization": f"Basic {invalid_auth}"})
+    assert response.status_code == 401
+
+def test_admin_auth_valid():
+    """/admin accepts valid Basic Auth (admin:admin)"""
+    import base64
+    valid_auth = base64.b64encode(b"admin:admin").decode("utf-8")
+    response = client.get("/admin/", headers={"Authorization": f"Basic {valid_auth}"})
+    assert response.status_code == 200

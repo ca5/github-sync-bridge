@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Obsidian Sync Server Admin</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; line-height: 1.6; }
+        h1, h2 { color: #333; }
+        .section { border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 5px; }
+        .status-success { color: green; font-weight: bold; }
+        .status-failed { color: red; font-weight: bold; }
+        .status-skipped { color: orange; font-weight: bold; }
+        input[type="text"], input[type="password"], select { padding: 5px; margin: 5px 0; width: 100%; box-sizing: border-box; }
+        button { padding: 8px 15px; margin-top: 10px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 3px; }
+        button:hover { background-color: #0056b3; }
+        #auth-section { margin-bottom: 20px; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+    <h1>Obsidian Sync Server Admin</h1>
+
+    <div id="auth-section" class="section">
+        <label for="apiKey">API Key:</label>
+        <input type="password" id="apiKey" placeholder="Enter API Key" />
+        <button onclick="connect()">Connect</button>
+        <span id="connect-status"></span>
+    </div>
+
+    <div id="main-ui" class="hidden">
+
+        <div class="section">
+            <h2>Obsidian Sync Status</h2>
+            <p>Last Sync: <span id="last-sync-time"></span></p>
+            <p>Result: <span id="last-sync-result"></span></p>
+            <p>Message: <span id="last-sync-message"></span></p>
+            <button onclick="forceSync()">Force Sync</button>
+            <button onclick="loadSyncStatus()">Refresh</button>
+        </div>
+
+        <div class="section">
+            <h2>Git Status</h2>
+            <p>Current Branch: <strong id="current-branch"></strong></p>
+            <p>Uncommitted Changes: <span id="uncommitted-count"></span> files</p>
+
+            <h3>Switch Branch</h3>
+            <select id="branch-select"></select>
+            <button onclick="switchBranch()">Checkout & Pull</button>
+            <p id="checkout-result"></p>
+
+            <h3>Commit & Push</h3>
+            <input type="text" id="commit-message" placeholder="Commit message" />
+            <button onclick="commitChanges()">Commit</button>
+            <button onclick="pushChanges()">Push</button>
+            <button onclick="pullChanges()">Pull</button>
+            <p id="git-result"></p>
+        </div>
+
+    </div>
+
+    <script>
+        let apiKey = "";
+
+        async function api(path, options = {}) {
+            options.headers = {
+                ...options.headers,
+                'X-API-Key': apiKey,
+                'Content-Type': 'application/json'
+            };
+            const response = await fetch(path, options);
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.detail || 'API request failed');
+            }
+            return data;
+        }
+
+        async function connect() {
+            apiKey = document.getElementById("apiKey").value;
+            try {
+                await loadSyncStatus();
+                await loadGitStatus();
+                await loadGitBranches();
+                document.getElementById("main-ui").classList.remove("hidden");
+                document.getElementById("connect-status").innerText = "Connected!";
+                document.getElementById("connect-status").className = "status-success";
+            } catch (err) {
+                document.getElementById("connect-status").innerText = "Connection failed: " + err.message;
+                document.getElementById("connect-status").className = "status-failed";
+                document.getElementById("main-ui").classList.add("hidden");
+            }
+        }
+
+        async function loadSyncStatus() {
+            try {
+                const data = await api('/api/sync/status');
+                document.getElementById("last-sync-time").innerText = data.last_sync_at || 'Never';
+                const resEl = document.getElementById("last-sync-result");
+                resEl.innerText = data.last_sync_result || 'N/A';
+                resEl.className = 'status-' + (data.last_sync_result || 'skipped');
+                document.getElementById("last-sync-message").innerText = data.last_sync_message || '';
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function forceSync() {
+            try {
+                document.getElementById("last-sync-message").innerText = "Syncing...";
+                const data = await api('/api/sync/force', { method: 'POST' });
+                alert(data.message);
+                await loadSyncStatus();
+            } catch (err) {
+                alert("Force sync failed: " + err.message);
+            }
+        }
+
+        async function loadGitStatus() {
+            try {
+                const data = await api('/api/git/status');
+                document.getElementById("current-branch").innerText = data.branch;
+                document.getElementById("uncommitted-count").innerText = data.changed_files.length;
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function loadGitBranches() {
+            try {
+                const data = await api('/api/git/branches');
+                const select = document.getElementById("branch-select");
+                select.innerHTML = '';
+                data.branches.forEach(b => {
+                    const option = document.createElement("option");
+                    option.value = b;
+                    option.text = b;
+                    if (b === data.current) option.selected = true;
+                    select.appendChild(option);
+                });
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function switchBranch() {
+            const branch = document.getElementById("branch-select").value;
+            const resEl = document.getElementById("checkout-result");
+            resEl.innerText = "Switching...";
+            try {
+                const data = await api('/api/git/checkout', {
+                    method: 'POST',
+                    body: JSON.stringify({ branch: branch, mode: "stash" })
+                });
+                resEl.innerText = `Switched to ${data.branch}. Pull output: ${data.pull_output}`;
+                await loadGitStatus();
+                await loadGitBranches();
+            } catch (err) {
+                resEl.innerText = "Failed: " + err.message;
+            }
+        }
+
+        async function commitChanges() {
+            const msg = document.getElementById("commit-message").value;
+            const resEl = document.getElementById("git-result");
+            if (!msg) {
+                alert("Please enter a commit message.");
+                return;
+            }
+            resEl.innerText = "Committing...";
+            try {
+                const data = await api('/api/git/commit', {
+                    method: 'POST',
+                    body: JSON.stringify({ message: msg })
+                });
+                resEl.innerText = `Commit successful: ${data.output}`;
+                document.getElementById("commit-message").value = '';
+                await loadGitStatus();
+            } catch (err) {
+                resEl.innerText = "Failed: " + err.message;
+            }
+        }
+
+        async function pushChanges() {
+            const resEl = document.getElementById("git-result");
+            resEl.innerText = "Pushing...";
+            try {
+                const data = await api('/api/git/push', { method: 'POST' });
+                resEl.innerText = `Push successful for branch ${data.branch}.`;
+            } catch (err) {
+                resEl.innerText = "Failed: " + err.message;
+            }
+        }
+
+        async function pullChanges() {
+            const resEl = document.getElementById("git-result");
+            resEl.innerText = "Pulling...";
+            try {
+                const data = await api('/api/git/pull', { method: 'POST' });
+                resEl.innerText = `Pull successful: ${data.output}`;
+                await loadGitStatus();
+            } catch (err) {
+                resEl.innerText = "Failed: " + err.message;
+            }
+        }
+    </script>
+</body>
+</html>
