@@ -550,7 +550,8 @@ class SyncSettingTab extends PluginSettingTab {
     }
 
     private url(path: string) {
-        return `${this.plugin.settings.serverUrl}${path}`;
+        const base = this.plugin.settings.serverUrl.replace(/\/+$/, '');
+        return `${base}${path}`;
     }
 
     private async apiGet<T>(path: string): Promise<T> {
@@ -603,13 +604,10 @@ class SyncSettingTab extends PluginSettingTab {
 
     async fetchAll(silent: boolean = false) {
         try {
-            [this.remoteSettings, this.syncStatus, this.gitStatus, this.gitBranches] =
-                await Promise.all([
-                    this.apiGet<RemoteSettings>('/api/settings'),
-                    this.apiGet<SyncStatus>('/api/sync/status'),
-                    this.apiGet<GitStatus>('/api/git/status'),
-                    this.apiGet<GitBranches>('/api/git/branches'),
-                ]);
+            this.remoteSettings = await this.apiGet<RemoteSettings>('/api/settings');
+            this.syncStatus = await this.apiGet<SyncStatus>('/api/sync/status');
+            this.gitStatus = await this.apiGet<GitStatus>('/api/git/status');
+            this.gitBranches = await this.apiGet<GitBranches>('/api/git/branches');
             // 接続成功 → 初期化待ち状態を解除
             this.stopRetry();
             this.isInitializing = false;
@@ -633,11 +631,9 @@ class SyncSettingTab extends PluginSettingTab {
 
     async refreshStatus() {
         try {
-            [this.syncStatus, this.gitStatus, this.gitBranches] = await Promise.all([
-                this.apiGet<SyncStatus>('/api/sync/status'),
-                this.apiGet<GitStatus>('/api/git/status'),
-                this.apiGet<GitBranches>('/api/git/branches'),
-            ]);
+            this.syncStatus = await this.apiGet<SyncStatus>('/api/sync/status');
+            this.gitStatus = await this.apiGet<GitStatus>('/api/git/status');
+            this.gitBranches = await this.apiGet<GitBranches>('/api/git/branches');
             this.isInitializing = false;
         } catch (e: any) {
             if (e.isInitializing) {
