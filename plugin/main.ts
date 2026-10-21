@@ -550,7 +550,8 @@ class SyncSettingTab extends PluginSettingTab {
     }
 
     private url(path: string) {
-        return `${this.plugin.settings.serverUrl}${path}`;
+        const base = this.plugin.settings.serverUrl.replace(/\/+$/, '');
+        return `${base}${path}`;
     }
 
     private async apiGet<T>(path: string): Promise<T> {

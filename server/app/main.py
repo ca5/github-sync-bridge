@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import json
@@ -12,6 +13,14 @@ import time
 from datetime import datetime, timezone
 
 app = FastAPI(title="Obsidian Sync Server API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 import os
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "../static")
