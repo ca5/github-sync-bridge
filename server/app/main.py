@@ -386,7 +386,7 @@ class CheckoutRequest(BaseModel):
 def git_status(x_api_key: Optional[str] = Header(None)):
     """Return current branch and changed files"""
     verify_api_key(x_api_key)
-    if not _ob_sync_lock.acquire(blocking=False):
+    if not _ob_sync_lock.acquire(timeout=0.5):
         raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
         try:
@@ -409,7 +409,7 @@ def git_status(x_api_key: Optional[str] = Header(None)):
 def git_branches(x_api_key: Optional[str] = Header(None)):
     """ローカル + Return list of remote branches"""
     verify_api_key(x_api_key)
-    if not _ob_sync_lock.acquire(blocking=False):
+    if not _ob_sync_lock.acquire(timeout=0.5):
         raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
         try:
@@ -437,7 +437,7 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
     未追跡ファイルも checkout をブロックする場合existsため、全変更をチェックする。
     """
     verify_api_key(x_api_key)
-    if not _ob_sync_lock.acquire(blocking=False):
+    if not _ob_sync_lock.acquire(timeout=0.5):
         raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
         try:
@@ -505,7 +505,7 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
 def git_commit(req: CommitRequest, x_api_key: Optional[str] = Header(None)):
     """Stage all changes and commit with message"""
     verify_api_key(x_api_key)
-    if not _ob_sync_lock.acquire(blocking=False):
+    if not _ob_sync_lock.acquire(timeout=0.5):
         raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
         try:
@@ -522,7 +522,7 @@ def git_commit(req: CommitRequest, x_api_key: Optional[str] = Header(None)):
 def git_push(x_api_key: Optional[str] = Header(None)):
     """現在のブランチをリモートへ push する（SSH認証）"""
     verify_api_key(x_api_key)
-    if not _ob_sync_lock.acquire(blocking=False):
+    if not _ob_sync_lock.acquire(timeout=0.5):
         raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
         try:
@@ -538,7 +538,7 @@ def git_push(x_api_key: Optional[str] = Header(None)):
 def git_pull(x_api_key: Optional[str] = Header(None)):
     """Pull current branch from remote"""
     verify_api_key(x_api_key)
-    if not _ob_sync_lock.acquire(blocking=False):
+    if not _ob_sync_lock.acquire(timeout=0.5):
         raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
         try:
@@ -555,7 +555,7 @@ def git_pull(x_api_key: Optional[str] = Header(None)):
 def git_reset(x_api_key: Optional[str] = Header(None)):
     """Discard all local changes and reset to match the remote branch"""
     verify_api_key(x_api_key)
-    if not _ob_sync_lock.acquire(blocking=False):
+    if not _ob_sync_lock.acquire(timeout=0.5):
         raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
         try:
