@@ -1,2 +1,5 @@
 packages:
   - 'plugin'
+
+onlyBuiltDependencies:
+  - better-sqlite3

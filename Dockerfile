@@ -18,9 +18,10 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 COPY plugin/package.json ./plugin/
 COPY scripts/ ./scripts/
 
-# 本番依存インストール（ignore-scriptsでインストール後にbetter-sqlite3を明示的にrebuild）
+# 本番依存インストール（ignore-scriptsでインストール後にbetter-sqlite3を直接ビルド）
 RUN pnpm install --frozen-lockfile --prod --ignore-scripts
-RUN pnpm rebuild better-sqlite3
+RUN cd $(find node_modules -name "better-sqlite3" -type d | head -n 1) \
+    && (npx --yes prebuild-install || npm run build-release || npm run install)
 RUN node scripts/patch-obsidian-headless.js
 
 # better-sqlite3 のネイティブバインディングが正しく動作することをビルド時に検証
