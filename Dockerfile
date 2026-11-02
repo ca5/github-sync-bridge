@@ -18,12 +18,13 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 COPY plugin/package.json ./plugin/
 COPY scripts/ ./scripts/
 
-# 本番依存インストール（better-sqlite3 のビルドを実行）
-RUN pnpm install --prod
+# 本番依存インストール（ignore-scriptsでインストール後にbetter-sqlite3を明示的にrebuild）
+RUN pnpm install --frozen-lockfile --prod --ignore-scripts
+RUN pnpm rebuild better-sqlite3
 RUN node scripts/patch-obsidian-headless.js
 
 # better-sqlite3 のネイティブバインディングが正しく動作することをビルド時に検証
-RUN node -e "require('better-sqlite3')"
+RUN node -e "require('better-sqlite3'); console.log('better-sqlite3 loaded successfully in stage 1')"
 
 # ── ステージ2: アプリケーション本体 ────────────────────────────────────
 FROM python:3.11-slim
