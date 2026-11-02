@@ -288,7 +288,10 @@ def run_ob_sync(timeout: int = 60) -> tuple[bool, str]:
                 timeout=timeout,
             )
         output = sync_result.stdout or ""
-        _log(f"ob sync successful: {output[:120].strip()}")
+        stderr = sync_result.stderr or ""
+        _log(f"ob sync stdout: {output[:300].strip()}")
+        if stderr:
+            _log(f"ob sync stderr: {stderr[:300].strip()}")
         _sync_status.update({
             "last_sync_at": datetime.now(timezone.utc).isoformat(),
             "last_sync_result": "success",
@@ -332,13 +335,27 @@ def get_sync_log(x_api_key: Optional[str] = Header(None)):
     """Return latest lines from obsidian-headless sync.log"""
     verify_api_key(x_api_key)
     import glob
-    log_paths = glob.glob(os.path.expanduser("~/.obsidian-headless/sync/*/sync.log"))
+    search_dirs = [
+        os.path.expanduser("~/.config/obsidian-headless/sync/*/sync.log"),
+        os.path.expanduser("~/.obsidian-headless/sync/*/sync.log"),
+        "/root/.config/obsidian-headless/sync/*/sync.log",
+        "/root/.obsidian-headless/sync/*/sync.log",
+    ]
+    log_paths = []
+    for pattern in search_dirs:
+        log_paths.extend(glob.glob(pattern))
+
     if not log_paths:
-        return {"log": "No sync.log found"}
+        # Check what files exist in config dirs
+        existing_info = []
+        for d in [os.path.expanduser("~/.config/obsidian-headless"), "/root/.config/obsidian-headless"]:
+            if os.path.exists(d):
+                existing_info.append(f"{d} exists, contents: {os.listdir(d)}")
+        return {"log": "No sync.log found", "debug_dirs": existing_info}
     try:
         with open(log_paths[0], "r", encoding="utf-8") as f:
             lines = f.readlines()
-            return {"log": lines[-50:]}
+            return {"log_path": log_paths[0], "lines": lines[-100:]}
     except Exception as e:
         return {"log": f"Error reading sync.log: {e}"}
 
