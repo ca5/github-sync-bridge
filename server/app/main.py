@@ -221,6 +221,12 @@ def clear_sync_lock() -> None:
             _log(f"Removed stale vault sync lock: {sync_lock}")
         except OSError as e:
             _log(f"Warning: Could not remove vault sync lock: {e}")
+    elif os.path.isfile(sync_lock):
+        try:
+            os.remove(sync_lock)
+            _log(f"Removed stale vault sync lock file: {sync_lock}")
+        except OSError as e:
+            _log(f"Warning: Could not remove vault sync lock file: {e}")
 
     # 2. ~/.obsidian-headless/sync/ 配下の *.lock
     obs_sync_dir = os.path.expanduser("~/.obsidian-headless/sync")
@@ -239,33 +245,95 @@ def clear_sync_lock() -> None:
 # ob sync の同時実行を防ぐロック（force_sync ↔ sync_worker の競合防止）
 _ob_sync_lock = threading.Lock()
 
-
-@app.post("/api/sync/force")
-def force_sync(x_api_key: Optional[str] = Header(None)):
-    verify_api_key(x_api_key)
-    settings = load_settings()
-
-    # 安全チェック: Vaultが空Forはsyncを拒否
+def run_ob_sync(timeout: int = 60) -> tuple[bool, str]:
+    """
+    ワンショットで ob sync を実行し、Obsidian Sync クラウドと同期する。
+    Returns: (is_success, output_or_error_message)
+    """
     safe, reason = check_vault_safety()
     if not safe:
-        raise HTTPException(status_code=500, detail=f"Sync aborted: {reason}")
+        _log(f"ob sync skipped (safety check): {reason}")
+        _sync_status.update({
+            "last_sync_at": datetime.now(timezone.utc).isoformat(),
+            "last_sync_result": "skipped",
+            "last_sync_message": reason,
+        })
+        return False, f"Sync aborted: {reason}"
 
-    # 同期実行ロジック (obsidian-headless版)
-    print(f"Executing force sync...")
+    if not _is_ob_auth_configured():
+        msg = (
+            "Obsidian Auth not configured: ~/.obsidian-headless/auth_token missing."
+            "Run setup-obsidian-auth.sh to register OBSIDIAN_AUTH_TOKEN."
+        )
+        _log(f"ob sync skipped: {msg}")
+        _sync_status.update({
+            "last_sync_at": datetime.now(timezone.utc).isoformat(),
+            "last_sync_result": "skipped",
+            "last_sync_message": msg,
+        })
+        return False, msg
 
-    # Executing sync
+    _log("Executing ob sync...")
     sync_command = [OB_CMD, "sync", "--path", VAULT_DIR]
 
     try:
         with _ob_sync_lock:
             clear_sync_lock()
-            sync_result = subprocess.run(sync_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
-        output = sync_result.stdout
-        return {"status": "success", "message": "Force sync triggered successfully.", "output": output}
+            sync_result = subprocess.run(
+                sync_command,
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=VAULT_DIR,
+                timeout=timeout,
+            )
+        output = sync_result.stdout or ""
+        _log(f"ob sync successful: {output[:120].strip()}")
+        _sync_status.update({
+            "last_sync_at": datetime.now(timezone.utc).isoformat(),
+            "last_sync_result": "success",
+            "last_sync_message": "",
+        })
+        return True, output
+    except subprocess.TimeoutExpired:
+        msg = f"ob sync timed out after {timeout}s"
+        _log(f"Warning: {msg}")
+        clear_sync_lock()
+        _sync_status.update({
+            "last_sync_at": datetime.now(timezone.utc).isoformat(),
+            "last_sync_result": "failed",
+            "last_sync_message": msg,
+        })
+        return False, msg
     except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"Sync failed: {_trim_error(e.stderr)}")
+        stderr = e.stderr or ""
+        msg = _trim_error(stderr)
+        _log(f"ob sync failed: {msg}")
+        clear_sync_lock()
+        _sync_status.update({
+            "last_sync_at": datetime.now(timezone.utc).isoformat(),
+            "last_sync_result": "failed",
+            "last_sync_message": msg,
+        })
+        return False, f"Sync failed: {msg}"
     except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="obsidian-headless (ob) is not installed or not in PATH.")
+        msg = "obsidian-headless (ob) is not installed or not in PATH."
+        _log(msg)
+        _sync_status.update({
+            "last_sync_at": datetime.now(timezone.utc).isoformat(),
+            "last_sync_result": "failed",
+            "last_sync_message": msg,
+        })
+        return False, msg
+
+
+@app.post("/api/sync/force")
+def force_sync(x_api_key: Optional[str] = Header(None)):
+    verify_api_key(x_api_key)
+    success, output = run_ob_sync(timeout=60)
+    if not success:
+        raise HTTPException(status_code=500, detail=output)
+    return {"status": "success", "message": "Force sync triggered successfully.", "output": output}
 
 # -------------------------------------------------------------------
 # Git API
@@ -503,9 +571,13 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
         _ob_sync_lock.release()
 @app.post("/api/git/commit")
 def git_commit(req: CommitRequest, x_api_key: Optional[str] = Header(None)):
-    """Stage all changes and commit with message"""
+    """Stage all changes and commit with message. Triggers ob sync first to pull latest remote notes."""
     verify_api_key(x_api_key)
-    if not _ob_sync_lock.acquire(timeout=0.5):
+
+    # コミット前に最新の Obsidian Sync ノートを取得
+    run_ob_sync(timeout=30)
+
+    if not _ob_sync_lock.acquire(timeout=5.0):
         raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")
     try:
         try:
@@ -577,77 +649,7 @@ def sync_worker():
         interval = settings.auto_sync_interval
 
         _log(f"Background worker running... Interval: {interval} min")
-
-        # 安全チェック: Vaultが空Forはsyncをスキップ
-        safe, reason = check_vault_safety()
-        if not safe:
-            _log(f"Background sync skipped: {reason}")
-            _sync_status.update({
-                "last_sync_at": datetime.now(timezone.utc).isoformat(),
-                "last_sync_result": "skipped",
-                "last_sync_message": reason,
-            })
-            time.sleep(interval * 60)
-            continue
-
-        # Auth check: トークン未設定Forは ob sync をスキップ
-        if not _is_ob_auth_configured():
-            msg = (
-                "Obsidian Auth not configured: ~/.obsidian-headless/auth_token missing."
-                "Run setup-obsidian-auth.sh to register OBSIDIAN_AUTH_TOKEN."
-            )
-            _log(f"Background sync skipped: {msg}")
-            _sync_status.update({
-                "last_sync_at": datetime.now(timezone.utc).isoformat(),
-                "last_sync_result": "skipped",
-                "last_sync_message": msg,
-            })
-            time.sleep(interval * 60)
-            continue
-
-        # sync前にロックを解放してから実行（_ob_sync_lock で同時実行も防止）
-        with _ob_sync_lock:
-            clear_sync_lock()
-
-            # Executing sync
-            sync_command = [OB_CMD, "sync", "--path", VAULT_DIR]
-
-            try:
-                subprocess.run(sync_command, capture_output=True, text=True, check=True, cwd=VAULT_DIR)
-                _log("Background sync successful.")
-                _sync_status.update({
-                    "last_sync_at": datetime.now(timezone.utc).isoformat(),
-                    "last_sync_result": "success",
-                    "last_sync_message": "",
-                })
-            except subprocess.CalledProcessError as e:
-                stderr = e.stderr or ""
-                # "Another sync instance" Transient state - clearing lock and skipping
-                if "another sync instance" in stderr.lower() or "already running" in stderr.lower():
-                    _log("Background sync: another instance detected, clearing lock and retrying next interval.")
-                    clear_sync_lock()
-                    _sync_status.update({
-                        "last_sync_at": datetime.now(timezone.utc).isoformat(),
-                        "last_sync_result": "skipped",
-                        "last_sync_message": "Skipped because another sync was running. Lock cleared.",
-                    })
-                else:
-                    msg = _trim_error(stderr)
-                    _log(f"Background sync failed: {msg}")
-                    _sync_status.update({
-                        "last_sync_at": datetime.now(timezone.utc).isoformat(),
-                        "last_sync_result": "failed",
-                        "last_sync_message": msg,
-                    })
-            except FileNotFoundError:
-                msg = "obsidian-headless (ob) is not installed or not in PATH."
-                _log(msg)
-                _sync_status.update({
-                    "last_sync_at": datetime.now(timezone.utc).isoformat(),
-                    "last_sync_result": "failed",
-                    "last_sync_message": msg,
-                })
-
+        run_ob_sync(timeout=60)
         # Wait for next interval
         time.sleep(interval * 60)
 
@@ -671,8 +673,8 @@ def startup_event():
     _log("▶ Phase 4/5: ob sync-setup")
     setup_obsidian_vault()
 
-    # ob sync-setup Clear lock again as sync-setup might create one
-    clear_sync_lock()
+    _log("▶ Phase 4.5/5: Initial ob sync")
+    run_ob_sync(timeout=60)
 
     # Create settings file if missing on first boot
     if not os.path.exists(CONFIG_FILE):

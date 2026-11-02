@@ -353,6 +353,24 @@ def test_git_commit_nothing_to_commit(mock_git):
     assert response.status_code == 500
     assert "git commit failed" in response.json()["detail"]
 
+@patch("app.main.run_ob_sync")
+@patch("app.main._git")
+def test_git_commit_triggers_pre_sync(mock_git, mock_sync):
+    """コミット実行前に run_ob_sync が呼び出される"""
+    mock_sync.return_value = (True, "synced")
+    mock_git.side_effect = [
+        _make_proc(""),                                     # add -A
+        _make_proc("[main abc1234] my commit\n 1 file changed\n"),  # commit
+    ]
+    response = client.post(
+        "/api/git/commit",
+        headers={"X-API-Key": "test-secret-key"},
+        json={"message": "my commit"}
+    )
+    assert response.status_code == 200
+    assert mock_sync.called
+    assert mock_sync.call_args[1].get("timeout") == 30
+
 # =========================================================
 # Git API: /api/git/push
 # =========================================================

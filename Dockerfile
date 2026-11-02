@@ -9,9 +9,11 @@ RUN npm install -g pnpm
 # 依存関係ファイルをコピー（pluginのpackage.jsonも必要: workspaceの解決）
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 COPY plugin/package.json ./plugin/
+COPY scripts/ ./scripts/
 
 # 本番依存のみインストール（plugin devDeps を除く）
 RUN pnpm install --frozen-lockfile --prod --ignore-scripts
+RUN node scripts/patch-obsidian-headless.js
 
 # ── ステージ2: アプリケーション本体 ────────────────────────────────────
 FROM python:3.11-slim

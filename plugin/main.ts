@@ -47,6 +47,7 @@ const STRINGS = {
         msgCheckedOut: "✅ Checked out ",
         msgCommitting: "📝 Committing changes...",
         msgCommitted: "✅ Committed: ",
+        msgNoChanges: "ℹ️ No changes to commit.",
         msgCommitFailed: "❌ Commit failed: ",
         msgPushing: "⬆️ Pushing...",
         msgPushDone: "✅ Push completed",
@@ -140,6 +141,7 @@ const STRINGS = {
         msgCheckedOut: "✅ 切り替えました: ",
         msgCommitting: "📝 変更をコミット中...",
         msgCommitted: "✅ コミットしました: ",
+        msgNoChanges: "ℹ️ コミットする変更はありませんでした。",
         msgCommitFailed: "❌ コミット失敗: ",
         msgPushing: "⬆️ Push中...",
         msgPushDone: "✅ Push 完了",
@@ -697,7 +699,14 @@ class SyncSettingTab extends PluginSettingTab {
         }
         try {
             new Notice(t('msgCommitting'));
-            await this.apiPost('/api/git/commit', { message: this.commitMessage });
+            const commitRes = await this.apiPost<{ status: string; output?: string; message?: string }>('/api/git/commit', { message: this.commitMessage });
+            if (commitRes.status === 'no_changes') {
+                new Notice(t('msgNoChanges'));
+                this.commitMessage = '';
+                await this.refreshStatus();
+                return;
+            }
+
             new Notice(t('msgCommitted'));
             this.commitMessage = '';
 
