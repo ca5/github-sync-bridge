@@ -3,6 +3,13 @@ FROM node:22-slim AS node-deps
 
 WORKDIR /app
 
+# ネイティブアドオン (better-sqlite3) のコンパイルに必要なパッケージ
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
 # pnpm のインストール
 RUN npm install -g pnpm
 
@@ -11,9 +18,12 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 COPY plugin/package.json ./plugin/
 COPY scripts/ ./scripts/
 
-# 本番依存のみインストール（plugin devDeps を除く）
-RUN pnpm install --frozen-lockfile --prod --ignore-scripts
+# 本番依存インストール（better-sqlite3 のビルドを実行）
+RUN pnpm install --prod
 RUN node scripts/patch-obsidian-headless.js
+
+# better-sqlite3 のネイティブバインディングが正しく動作することをビルド時に検証
+RUN node -e "require('better-sqlite3')"
 
 # ── ステージ2: アプリケーション本体 ────────────────────────────────────
 FROM python:3.11-slim
@@ -44,6 +54,10 @@ WORKDIR /app
 # Node modules（ステージ1からコピー）
 COPY --from=node-deps /app/node_modules ./node_modules
 COPY package.json ./
+
+# better-sqlite3 および ob コマンドが実行可能かを検証
+RUN node -e "require('better-sqlite3'); console.log('better-sqlite3 loaded successfully in stage 2')" \
+    && ./node_modules/.bin/ob --help > /dev/null
 
 # Python 依存のインストール
 COPY server/requirements.txt ./server/
