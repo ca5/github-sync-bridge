@@ -25,7 +25,7 @@ RUN cd $(find node_modules -name "better-sqlite3" -type d | head -n 1) \
 RUN node scripts/patch-obsidian-headless.js
 
 # better-sqlite3 のネイティブバインディングが正しく動作することをビルド時に検証
-RUN node -e "require('better-sqlite3'); console.log('better-sqlite3 loaded successfully in stage 1')"
+RUN node -e "const p = require('child_process').execSync('find node_modules -name better_sqlite3.node').toString().trim().split('\n')[0]; if (!p) throw new Error('better_sqlite3.node not found!'); console.log('Found binding:', p); require(require('path').resolve(p)); console.log('better-sqlite3 loaded successfully in stage 1')"
 
 # ── ステージ2: アプリケーション本体 ────────────────────────────────────
 FROM python:3.11-slim
@@ -58,7 +58,7 @@ COPY --from=node-deps /app/node_modules ./node_modules
 COPY package.json ./
 
 # better-sqlite3 および ob コマンドが実行可能かを検証
-RUN node -e "require('better-sqlite3'); console.log('better-sqlite3 loaded successfully in stage 2')" \
+RUN node -e "const p = require('child_process').execSync('find node_modules -name better_sqlite3.node').toString().trim().split('\n')[0]; if (!p) throw new Error('better_sqlite3.node not found in stage 2!'); require(require('path').resolve(p)); console.log('better-sqlite3 loaded successfully in stage 2')" \
     && ./node_modules/.bin/ob --help > /dev/null
 
 # Python 依存のインストール
