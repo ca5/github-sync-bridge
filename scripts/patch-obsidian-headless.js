@@ -23,15 +23,22 @@ function patchFile(filePath) {
         console.warn(`[patch] Warning: Target A not found in ${filePath}`);
     }
 
-    // Patch B: Fix ob sync one-shot mode (do not hang forever if not --continuous)
-    const targetB = 'await this.requestSync(),await e';
-    const replaceB = 'await this.requestSync(),(this.continuous?await e:this.stop())';
-    if (content.includes(targetB)) {
-        content = content.replace(targetB, replaceB);
+    // Patch B: Proper one-shot sync: wait for ready & pending files to drain, then stop
+    const oneShotLogic = `if(this.continuous){await e}else{let _w=Date.now();while(!this.ready&&Date.now()-_w<15000){await new Promise(r=>setTimeout(r,200))}let _idle=0,_end=Date.now()+60000;while(Date.now()<_end){if(this.syncing||(this.newServerFiles&&this.newServerFiles.length>0)){_idle=0}else{_idle++;if(_idle>=3)break}await new Promise(r=>setTimeout(r,200))}this.stop()}`;
+
+    const oldTargetB1 = 'await this.requestSync(),await e';
+    const oldTargetB2 = 'await this.requestSync(),(this.continuous?await e:this.stop())';
+
+    if (content.includes(oldTargetB2)) {
+        content = content.replace(oldTargetB2, `await this.requestSync();${oneShotLogic}`);
         modified = true;
-        console.log(`[patch] Applied Patch B (one-shot sync termination) to ${filePath}`);
-    } else if (content.includes(replaceB)) {
-        console.log(`[patch] Patch B already applied to ${filePath}`);
+        console.log(`[patch] Updated Patch B with robust one-shot sync logic in ${filePath}`);
+    } else if (content.includes(oldTargetB1)) {
+        content = content.replace(oldTargetB1, `await this.requestSync();${oneShotLogic}`);
+        modified = true;
+        console.log(`[patch] Applied Patch B with robust one-shot sync logic to ${filePath}`);
+    } else if (content.includes(oneShotLogic)) {
+        console.log(`[patch] Patch B already up to date in ${filePath}`);
     } else {
         console.warn(`[patch] Warning: Target B not found in ${filePath}`);
     }
@@ -63,7 +70,7 @@ function findCliJsFiles(dir) {
                 }
             }
         } catch (e) {
-            // Ignore permission / access errors
+            // Ignore errors
         }
     }
 

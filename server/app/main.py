@@ -327,10 +327,25 @@ def run_ob_sync(timeout: int = 60) -> tuple[bool, str]:
         return False, msg
 
 
+@app.get("/api/sync/log")
+def get_sync_log(x_api_key: Optional[str] = Header(None)):
+    """Return latest lines from obsidian-headless sync.log"""
+    verify_api_key(x_api_key)
+    import glob
+    log_paths = glob.glob(os.path.expanduser("~/.obsidian-headless/sync/*/sync.log"))
+    if not log_paths:
+        return {"log": "No sync.log found"}
+    try:
+        with open(log_paths[0], "r", encoding="utf-8") as f:
+            lines = f.readlines()
+            return {"log": lines[-50:]}
+    except Exception as e:
+        return {"log": f"Error reading sync.log: {e}"}
+
 @app.post("/api/sync/force")
 def force_sync(x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
-    success, output = run_ob_sync(timeout=60)
+    success, output = run_ob_sync(timeout=120)
     if not success:
         raise HTTPException(status_code=500, detail=output)
     return {"status": "success", "message": "Force sync triggered successfully.", "output": output}
@@ -575,7 +590,7 @@ def git_commit(req: CommitRequest, x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
 
     # コミット前に最新の Obsidian Sync ノートを取得
-    run_ob_sync(timeout=30)
+    run_ob_sync(timeout=60)
 
     if not _ob_sync_lock.acquire(timeout=5.0):
         raise HTTPException(status_code=409, detail="Git operation blocked: Sync in progress.")

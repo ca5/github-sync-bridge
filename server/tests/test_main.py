@@ -369,7 +369,7 @@ def test_git_commit_triggers_pre_sync(mock_git, mock_sync):
     )
     assert response.status_code == 200
     assert mock_sync.called
-    assert mock_sync.call_args[1].get("timeout") == 30
+    assert mock_sync.call_args[1].get("timeout") == 60
 
 # =========================================================
 # Git API: /api/git/push
