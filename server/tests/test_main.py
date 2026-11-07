@@ -388,6 +388,25 @@ def test_git_push_success(mock_git):
     assert data["status"] == "success"
     assert data["branch"] == "main"
 
+@patch("app.main._restore_mtime_to_commit")
+@patch("app.main._git")
+def test_git_push_retry_on_non_fast_forward(mock_git, mock_restore):
+    """push が non-fast-forward で拒否された場合、pull して再試行する"""
+    mock_git.side_effect = [
+        _make_proc("main\n"),           # rev-parse
+        subprocess.CalledProcessError(1, "git push", stderr="! [rejected] main -> main (non-fast-forward)"),  # 1st push fails
+        _make_proc("Merge made by the 'ort' strategy.\n"),  # pull --no-rebase
+        _make_proc("To github.com:ca5/obsidian\n   abc..def  main -> main\n"),  # 2nd push succeeds
+    ]
+    response = client.post("/api/git/push", headers={"X-API-Key": "test-secret-key"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert mock_git.call_count == 4
+    # Check that pull --no-rebase --no-edit was called
+    assert mock_git.call_args_list[2][0][0] == ["pull", "--no-rebase", "--no-edit", "origin", "main"]
+    assert mock_restore.called
+
 @patch("app.main._git")
 def test_git_push_failure(mock_git):
     """push 失敗時に 500 を返す"""
@@ -403,9 +422,11 @@ def test_git_push_failure(mock_git):
 # Git API: /api/git/pull
 # =========================================================
 
+@patch("app.main.run_ob_sync")
+@patch("app.main._restore_mtime_to_commit")
 @patch("app.main._git")
-def test_git_pull_success(mock_git):
-    """pull が成功する"""
+def test_git_pull_success(mock_git, mock_restore, mock_sync):
+    """pull が成功し、--no-rebase と ob sync が実行される"""
     mock_git.side_effect = [
         _make_proc("main\n"),
         _make_proc("Already up to date.\n"),
@@ -416,6 +437,9 @@ def test_git_pull_success(mock_git):
     assert data["status"] == "success"
     assert data["branch"] == "main"
     assert "Already up to date" in data["output"]
+    assert mock_git.call_args_list[1][0][0] == ["pull", "--no-rebase", "--no-edit", "origin", "main"]
+    assert mock_restore.called
+    assert mock_sync.called
 
 @patch("app.main._git")
 def test_git_pull_failure(mock_git):

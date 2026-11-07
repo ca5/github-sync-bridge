@@ -375,6 +375,8 @@ def _git_env() -> dict:
     """git コマンド実行時の環境変数（SSH 認証を含む）"""
     env = os.environ.copy()
     env["GIT_SSH_COMMAND"] = f"ssh -i {_GIT_SSH_KEY} -o StrictHostKeyChecking=no"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_MERGE_AUTOEDIT"] = "no"
     return env
 
 def _trim_error(stderr: str, max_len: int = 200) -> str:
@@ -576,7 +578,7 @@ def git_checkout(req: CheckoutRequest, x_api_key: Optional[str] = Header(None)):
             # Checkout branch (auto track if remote only)
             _git(["checkout", "-B", req.branch, f"origin/{req.branch}"])
             # git pull
-            pull_result = _git(["pull", "origin", req.branch])
+            pull_result = _git(["pull", "--no-rebase", "--no-edit", "origin", req.branch])
 
             # stash pop（mode=stash For）
             if note == "__stash_pop__":
@@ -631,13 +633,24 @@ def git_push(x_api_key: Optional[str] = Header(None)):
     try:
         try:
             branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-            result = _git(["push", "origin", branch])
+            try:
+                result = _git(["push", "origin", branch])
+            except subprocess.CalledProcessError as e:
+                err_output = (e.stderr or "") + (e.stdout or "")
+                if any(kw in err_output for kw in ["non-fast-forward", "rejected", "fetch first"]):
+                    _log("Push rejected (non-fast-forward). Attempting pull --no-rebase and retry push...")
+                    _git(["pull", "--no-rebase", "--no-edit", "origin", branch])
+                    _restore_mtime_to_commit()
+                    result = _git(["push", "origin", branch])
+                else:
+                    raise
             return {"status": "success", "branch": branch, "output": result.stdout.strip()}
         except subprocess.CalledProcessError as e:
             raise HTTPException(status_code=500, detail=f"git push failed: {e.stderr}")
 
     finally:
         _ob_sync_lock.release()
+
 @app.post("/api/git/pull")
 def git_pull(x_api_key: Optional[str] = Header(None)):
     """Pull current branch from remote"""
@@ -647,14 +660,16 @@ def git_pull(x_api_key: Optional[str] = Header(None)):
     try:
         try:
             branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-            result = _git(["pull", "origin", branch])
+            result = _git(["pull", "--no-rebase", "--no-edit", "origin", branch])
             _restore_mtime_to_commit()
-            return {"status": "success", "branch": branch, "output": result.stdout.strip()}
         except subprocess.CalledProcessError as e:
             raise HTTPException(status_code=500, detail=f"git pull failed: {e.stderr}")
-
     finally:
         _ob_sync_lock.release()
+
+    # Pull完了後に Obsidian Sync を実行して変更をクラウドに即時反映
+    run_ob_sync(timeout=60)
+    return {"status": "success", "branch": branch, "output": result.stdout.strip()}
 @app.post("/api/git/reset")
 def git_reset(x_api_key: Optional[str] = Header(None)):
     """Discard all local changes and reset to match the remote branch"""
@@ -766,6 +781,7 @@ def init_vault_from_github() -> None:
     git_email = os.getenv("GIT_USER_EMAIL", "obsidian-sync-bot@server")
     subprocess.run(["git", "config", "--global", "user.name", git_name], check=False)
     subprocess.run(["git", "config", "--global", "user.email", git_email], check=False)
+    subprocess.run(["git", "config", "--global", "pull.rebase", "false"], check=False)
 
     git_dir = os.path.join(VAULT_DIR, ".git")
 
@@ -774,7 +790,7 @@ def init_vault_from_github() -> None:
         _log(f"Vault already initialized at {VAULT_DIR}. Running git pull...")
         try:
             result = subprocess.run(
-                ["git", "pull"],
+                ["git", "pull", "--no-rebase", "--no-edit"],
                 capture_output=True, text=True, check=True,
                 cwd=VAULT_DIR, env=_git_env()
             )

@@ -49,7 +49,8 @@ RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh \
 # git グローバル設定（コミット時に必要）
 RUN git config --global user.email "obsidian-sync-bot@server" \
     && git config --global user.name "Obsidian Sync Bot" \
-    && git config --global core.longpaths true
+    && git config --global core.longpaths true \
+    && git config --global pull.rebase false
 
 WORKDIR /app
 
